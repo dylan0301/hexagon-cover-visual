@@ -366,7 +366,34 @@ Each \(t_j\) is shared by all six half-diagonals.  In Free mode, dragging any
 \(P_i(t_j)\) changes only that shared \(t_j\), unless that row is locked.  The
 lock only disables the UI handle; it does not change the mathematical target.
 
-## 14. The Benzene target
+## 14. D6 point-orbit targets
+
+The app also has an interactive point tool in Triangle, \(c_i\), Circle, and
+Free modes.  A seed point \(Q\in H\) generates the D6 orbit
+\[
+\mathcal O_{D_6}(Q)
+=
+\{r^k Q:k=0,\dots,5\}\cup\{r^k\sigma Q:k=0,\dots,5\},
+\]
+where \(r\) is rotation by \(\pi/3\) about \(O\), and
+\(\sigma(x,y)=(x,-y)\).  The app uses the set of distinct orbit points, so a
+generic seed gives twelve points, while seeds on symmetry axes or at \(O\) may
+give fewer.
+
+For a finite list of seeds \(Q_1,\dots,Q_m\), the additional point target is
+\[
+\mathcal Q
+=
+\bigcup_{\ell=1}^m \mathcal O_{D_6}(Q_\ell).
+\]
+These points are added to the active coverability check.  In Triangle mode
+they are tested against the C-triangle together with the generated
+\(V_i\)-triangles.  In \(c_i\) mode they are tested against the generated
+\(V_i\)-triangles.  In Circle mode they are tested against the C-circle
+together with the generated \(V_i\)-triangles.  In Free mode they are tested
+against all seven placed unit equilateral triangles.
+
+## 15. The Benzene target
 
 Free mode also has a target called **Benzene**.  It adds one fixed point in
 each center subtriangle
@@ -389,7 +416,7 @@ Equivalently, it is the full skeleton together with these six interior
 centroid points.  The \(B_i\) are fixed points; there is no additional
 parameter or drag interaction.
 
-## 15. The lotus target
+## 16. The lotus target
 
 There is another 1-dimensional target set used by the app, called **lotus**.
 Let

@@ -126,6 +126,29 @@ Thus Lotus consists of twelve unit-circle arcs plus the six hexagon perimeter
 edges.  The perimeter is part of Lotus, but it is recorded separately from the
 leaves \(L_i\).
 
+## D6 Point Seeds
+
+Free mode also has a `point` tool.  A point-tool click inside the hexagon
+creates a seed point \(Q\).  The seed contributes its full D6 orbit to the
+covering target:
+
+\[
+\mathcal O_{D_6}(Q)
+=
+\{r^k Q:k=0,\dots,5\}\cup\{r^k \sigma Q:k=0,\dots,5\},
+\]
+
+where \(r\) is rotation by \(\pi/3\) about \(O\), and \(\sigma(x,y)=(x,-y)\)
+is reflection across the horizontal axis.  Duplicate orbit points are merged,
+so a generic seed gives twelve points, while a seed on a symmetry axis or at
+the center gives fewer distinct points.
+
+Multiple seeds may be active at once.  Seed handles can be dragged, deleted one
+at a time, or cleared all at once.  Clicks and drags outside the hexagon are
+ignored.  Point seeds are saved in the Free JSON state.  The D6 orbit points
+are covering targets only; they are not named point sources for
+edge-through-point constraints.
+
 ## Base Constraints
 
 The following constraints are always active:
@@ -286,6 +309,9 @@ This means a point lying exactly on a triangle edge is not treated as covered
 for the strict validity test, even though it is visually on the boundary.
 
 ## Validity
+
+In every Free target below, if point seeds exist, every distinct point in every
+seed's D6 orbit must also be covered by at least one of the seven triangles.
 
 For target \(S\), a free-mode configuration is valid when:
 

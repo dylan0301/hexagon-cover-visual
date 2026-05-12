@@ -11,12 +11,14 @@ import {
   targetTPoint,
   triangleVertices,
 } from './freeGeometry';
+import { nextPointSeedId, pointInHexagon } from './symmetricPoints';
 import type { FreeSegmentRef, FreeState, FreeTriangleId, FreeTriangleState } from './freeTypes';
 import type { Point } from './types';
 
 const EDGE_HIT_PX = 7;
 const ROTATE_HIT_PX = 8;
 const TARGET_T_HIT_PX = 9;
+const POINT_SEED_HIT_PX = 9;
 
 export interface FreeInteractionApi {
   setEnabled(enabled: boolean): void;
@@ -29,6 +31,11 @@ type DragState =
       pointerId: number;
       index: number;
       targetTId: string;
+    }
+  | {
+      kind: 'point-seed';
+      pointerId: number;
+      seedId: string;
     }
   | {
       kind: 'move-triangle';
@@ -127,6 +134,33 @@ export function setupFreeInteraction(
     return best ? { index: best.index, targetTId: best.targetTId } : null;
   }
 
+  function pointSeedUnderPoint(point: Point): string | null {
+    const state = getState();
+    const limit = scaleToMath(POINT_SEED_HIT_PX);
+    let best: { id: string; distance: number } | null = null;
+    for (const seed of state.pointSeeds) {
+      const distance = Math.hypot(point.x - seed.point.x, point.y - seed.point.y);
+      if (distance <= limit && (!best || distance < best.distance)) {
+        best = { id: seed.id, distance };
+      }
+    }
+    return best?.id ?? null;
+  }
+
+  function addPointSeed(state: FreeState, point: Point): void {
+    const id = nextPointSeedId(state.pointSeeds);
+    state.pointSeeds.push({ id, point });
+    state.selectedPointSeedId = id;
+    state.status = `Created point seed ${id}.`;
+  }
+
+  function movePointSeed(state: FreeState, seedId: string, point: Point): void {
+    const seed = state.pointSeeds.find((candidate) => candidate.id === seedId);
+    if (!seed) return;
+    seed.point = point;
+    state.selectedPointSeedId = seedId;
+  }
+
   function setTargetTFromPoint(state: FreeState, targetTId: string, index: number, point: Point): void {
     const target = state.targetTPoints.find((candidate) => candidate.id === targetTId);
     if (!target || target.fixed) return;
@@ -149,6 +183,14 @@ export function setupFreeInteraction(
 
   function updateCursor(point: Point): void {
     const state = getState();
+    if (state.tool === 'point') {
+      if (pointSeedUnderPoint(point)) {
+        canvas.style.cursor = 'move';
+      } else {
+        canvas.style.cursor = pointInHexagon(point) ? 'crosshair' : 'default';
+      }
+      return;
+    }
     if (!enabled) return;
     if (state.tool === 'd-mark' || state.tool === 's-mark') {
       canvas.style.cursor = segmentUnderPoint(point) ? 'crosshair' : 'default';
@@ -197,6 +239,23 @@ export function setupFreeInteraction(
     if (!enabled || !e.isPrimary) return;
     const point = getPointerMath(e);
     const state = getState();
+    if (state.tool === 'point') {
+      const seedId = pointSeedUnderPoint(point);
+      if (seedId) {
+        state.selectedPointSeedId = seedId;
+        dragState = { kind: 'point-seed', pointerId: e.pointerId, seedId };
+        canvas.setPointerCapture(e.pointerId);
+        render();
+        e.preventDefault();
+        return;
+      }
+      if (pointInHexagon(point)) {
+        addPointSeed(state, point);
+        render();
+        e.preventDefault();
+      }
+      return;
+    }
     if (state.tool === 'd-mark' || state.tool === 's-mark') {
       const ref = segmentUnderPoint(point);
       if (ref) {
@@ -257,6 +316,14 @@ export function setupFreeInteraction(
       setTargetTFromPoint(state, activeDrag.targetTId, activeDrag.index, point);
       refreshLabels(state);
       render();
+      e.preventDefault();
+      return;
+    }
+    if (activeDrag.kind === 'point-seed') {
+      if (pointInHexagon(point)) {
+        movePointSeed(state, activeDrag.seedId, point);
+        render();
+      }
       e.preventDefault();
       return;
     }

@@ -18,4 +18,5 @@ export type InteractionState =
   | { kind: 'dragging-triangle'; startMouse: Point; startPos: Point; startControl: Point }
   | { kind: 'rotating-triangle'; startMouse: Point; startAngle: number; startPos: Point }
   | { kind: 'dragging-control-point'; startMouse: Point; startControl: Point }
+  | { kind: 'dragging-point-seed'; seedId: string }
   | { kind: 'dragging-start-value' };

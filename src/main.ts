@@ -19,18 +19,28 @@ import {
   drawShape,
   getCPerimeterIntersections,
   getInnerGammas,
+  CIRCUMRADIUS,
   type CPerimeterIntersections,
   type PerimeterIntersectionInterval,
 } from './triangle';
 import { setupInteraction } from './interaction';
 import { createRegionRenderer, type GraphMode } from './region';
 import {
+  buildCentralCoverTriangle,
   computeCoverResult,
   type CoverChainDirection,
   type CoverResult,
   type CoverSegmentReport,
   type CoverTriangle,
 } from './cover';
+import {
+  buildSymmetricPointTargets,
+  nextPointSeedId,
+  pointInHexagon,
+  sanitizePointSeeds,
+  type SymmetricPointSeed,
+  type SymmetricPointTarget,
+} from './symmetricPoints';
 import {
   allowedMidpointIndices,
   autoPlaceAllFreeVd0Triangles,
@@ -132,6 +142,11 @@ const strictEpsMaxInput = document.getElementById('strict-eps-max-input') as HTM
 const coverOverlayToggle = document.getElementById('cover-overlay-toggle') as HTMLInputElement;
 const coverOverlayToggleRow = document.getElementById('cover-overlay-toggle-row') as HTMLLabelElement;
 const coverOverlayStatus = document.getElementById('cover-overlay-status') as HTMLDivElement;
+const pointToolPanel = document.getElementById('point-tool-panel') as HTMLDivElement;
+const pointToolToggle = document.getElementById('point-tool-toggle') as HTMLButtonElement;
+const pointDeleteButton = document.getElementById('point-delete') as HTMLButtonElement;
+const pointClearButton = document.getElementById('point-clear') as HTMLButtonElement;
+const pointToolStatus = document.getElementById('point-tool-status') as HTMLSpanElement;
 const ceStatus = document.getElementById('ce-status') as HTMLDivElement;
 const ceControls = document.getElementById('ce-controls') as HTMLDivElement;
 const ceIntervalSelect = document.getElementById('ce-interval-select') as HTMLSelectElement;
@@ -164,6 +179,7 @@ let hoveredHalfDiagonalIndex: number | null = null;
 let selectedHalfDiagonalIndices: number[] = [];
 let strictEpsUpperBound = DEFAULT_STRICT_EPS_UPPER_BOUND;
 let showCoverOverlay = false;
+let pointToolActive = false;
 let ceDirection: CoverChainDirection = 'ccw';
 let ce2SelectedIntervalIndex = 0;
 let ceStartOverrides: Record<string, number> = {};
@@ -179,7 +195,7 @@ let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 
 interface ControllerSnapshot {
-  version: 3;
+  version: 4;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -195,9 +211,14 @@ interface ControllerSnapshot {
   ceDirection: CoverChainDirection;
   ce2SelectedIntervalIndex: number;
   ceStartOverrides: Record<string, number>;
+  pointSeeds: SymmetricPointSeed[];
+  selectedPointSeedId: string | null;
 }
 
-type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version'> & { version?: 1 | 2 | 3 };
+type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds'> & {
+  version?: 1 | 2 | 3 | 4;
+  pointSeeds?: unknown;
+};
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
   const rect = target.getBoundingClientRect();
@@ -234,6 +255,70 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function normalizeSelectedPointSeed(): void {
+  if (
+    freeState.selectedPointSeedId &&
+    !freeState.pointSeeds.some((seed) => seed.id === freeState.selectedPointSeedId)
+  ) {
+    freeState.selectedPointSeedId = null;
+  }
+}
+
+function pointSeedStatusText(): string {
+  normalizeSelectedPointSeed();
+  const seedCount = freeState.pointSeeds.length;
+  const pointCount = buildSymmetricPointTargets(freeState.pointSeeds).length;
+  const selected = freeState.selectedPointSeedId ? `; selected ${freeState.selectedPointSeedId}` : '';
+  return `${seedCount} seed${seedCount === 1 ? '' : 's'}, ${pointCount} D6 point${pointCount === 1 ? '' : 's'}${selected}`;
+}
+
+function addPointSeed(point: Point): void {
+  if (!pointInHexagon(point)) {
+    return;
+  }
+  const id = nextPointSeedId(freeState.pointSeeds);
+  freeState.pointSeeds.push({ id, point });
+  freeState.selectedPointSeedId = id;
+  freeState.status = `Created point seed ${id}.`;
+}
+
+function movePointSeed(seedId: string, point: Point): void {
+  if (!pointInHexagon(point)) {
+    return;
+  }
+  const seed = freeState.pointSeeds.find((candidate) => candidate.id === seedId);
+  if (!seed) {
+    return;
+  }
+  seed.point = point;
+  freeState.selectedPointSeedId = seedId;
+}
+
+function selectPointSeed(seedId: string): void {
+  if (freeState.pointSeeds.some((seed) => seed.id === seedId)) {
+    freeState.selectedPointSeedId = seedId;
+  }
+}
+
+function deleteSelectedPointSeed(): void {
+  const selected = freeState.selectedPointSeedId;
+  if (!selected) {
+    return;
+  }
+  freeState.pointSeeds = freeState.pointSeeds.filter((seed) => seed.id !== selected);
+  freeState.selectedPointSeedId = null;
+  freeState.status = `Deleted point seed ${selected}.`;
+}
+
+function clearPointSeeds(): void {
+  if (freeState.pointSeeds.length === 0) {
+    return;
+  }
+  freeState.pointSeeds = [];
+  freeState.selectedPointSeedId = null;
+  freeState.status = 'Cleared point seeds.';
+}
+
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
   const point = mathToCanvas({ x, y });
   ctx2d.beginPath();
@@ -245,6 +330,67 @@ function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill:
     ctx2d.lineWidth = 2;
     ctx2d.stroke();
   }
+}
+
+function drawSymmetricPoints(ctx2d: CanvasRenderingContext2D, failureLabels: Set<string>): void {
+  const targets = buildSymmetricPointTargets(freeState.pointSeeds);
+  if (targets.length === 0) {
+    return;
+  }
+
+  ctx2d.save();
+  for (const target of targets) {
+    const point = mathToCanvas(target.point);
+    ctx2d.beginPath();
+    ctx2d.arc(point.x, point.y, 4.5, 0, 2 * Math.PI);
+    ctx2d.fillStyle = failureLabels.has(target.label) ? '#dc2626' : '#2563eb';
+    ctx2d.fill();
+    ctx2d.strokeStyle = '#ffffff';
+    ctx2d.lineWidth = 1.5;
+    ctx2d.stroke();
+  }
+
+  for (const seed of freeState.pointSeeds) {
+    const point = mathToCanvas(seed.point);
+    ctx2d.beginPath();
+    ctx2d.arc(point.x, point.y, 8, 0, 2 * Math.PI);
+    ctx2d.strokeStyle = seed.id === freeState.selectedPointSeedId ? '#f59e0b' : '#0f172a';
+    ctx2d.lineWidth = seed.id === freeState.selectedPointSeedId ? 2.5 : 1.5;
+    ctx2d.stroke();
+  }
+  ctx2d.restore();
+}
+
+interface PointCoverageResult {
+  targets: SymmetricPointTarget[];
+  failures: string[];
+}
+
+function pointInCoverTriangle(point: Point, triangle: CoverTriangle): boolean {
+  return triangle.normals.every((normal, index) =>
+    normal.x * point.x + normal.y * point.y <= triangle.lambdas[index] + 1e-9,
+  );
+}
+
+function pointInCurrentCircle(point: Point): boolean {
+  return Math.hypot(point.x - triangleState.position.x, point.y - triangleState.position.y) <= CIRCUMRADIUS + 1e-9;
+}
+
+function computeNonFreePointCoverage(coverResult: CoverResult | null): PointCoverageResult {
+  const targets = buildSymmetricPointTargets(freeState.pointSeeds);
+  if (targets.length === 0) {
+    return { targets, failures: [] };
+  }
+  const cTriangle = shapeMode === 'triangle' ? buildCentralCoverTriangle(triangleState) : null;
+  const triangles = coverResult?.vTriangles ?? [];
+  const failures = targets.flatMap((target) => {
+    const coveredByCentral = cTriangle !== null
+      ? pointInCoverTriangle(target.point, cTriangle)
+      : shapeMode === 'circle' && pointInCurrentCircle(target.point);
+    const covered = coveredByCentral || triangles.some((triangle) => pointInCoverTriangle(target.point, triangle));
+    return covered ? [] : [target.label];
+  });
+  return { targets, failures };
 }
 
 function radialPoint(index: number, radius: number): { x: number; y: number } {
@@ -522,7 +668,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 3,
+    version: 4,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -542,6 +688,8 @@ function getControllerSnapshot(): ControllerSnapshot {
     ceDirection,
     ce2SelectedIntervalIndex,
     ceStartOverrides: sanitizeCeStartOverrides(ceStartOverrides),
+    pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
+    selectedPointSeedId: freeState.selectedPointSeedId,
   };
 }
 
@@ -553,7 +701,7 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) {
+  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) {
     throw new Error('Unsupported snapshot version.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
@@ -640,8 +788,14 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
   );
 
+  const pointSeeds = sanitizePointSeeds(parsed.pointSeeds);
+  const selectedPointSeedId = typeof parsed.selectedPointSeedId === 'string' &&
+    pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
+    ? parsed.selectedPointSeedId
+    : null;
+
   return {
-    version: 3,
+    version: 4,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -661,6 +815,8 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     ceDirection: parsed.ceDirection ?? 'ccw',
     ce2SelectedIntervalIndex: parsed.ce2SelectedIntervalIndex ?? 0,
     ceStartOverrides: sanitizeCeStartOverrides(parsed.ceStartOverrides),
+    pointSeeds,
+    selectedPointSeedId,
   };
 }
 
@@ -688,6 +844,8 @@ function loadControllerSnapshot(raw: string): void {
   ceDirection = snapshot.ceDirection;
   ce2SelectedIntervalIndex = snapshot.ce2SelectedIntervalIndex;
   ceStartOverrides = { ...snapshot.ceStartOverrides };
+  freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
+  freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -1029,19 +1187,27 @@ function resetCurrentCeStart(): void {
   render();
 }
 
-function summarizeCoverResult(result: CoverResult): string {
+function summarizeCoverResult(result: CoverResult, pointCoverage: PointCoverageResult): string {
   const gapSegments = result.segments
     .filter((segment) => segment.gaps.length > 0)
     .map((segment) => `${segment.kind} ${segment.index}`);
   const sizeText = result.tooLargeTriangles.length === 0
     ? 'perimeter sides < 1'
     : `perimeter side >= 1: ${result.tooLargeTriangles.join(', ')}`;
+  const pointText = pointCoverage.targets.length === 0
+    ? ''
+    : pointCoverage.failures.length === 0
+      ? `; D6 points PASS (${pointCoverage.targets.length})`
+      : `; D6 missing ${pointCoverage.failures.slice(0, 8).join(', ')}${pointCoverage.failures.length > 8 ? ', ...' : ''}`;
 
-  if (gapSegments.length === 0) {
-    return `cover: PASS; ${sizeText}`;
+  if (gapSegments.length === 0 && pointCoverage.failures.length === 0) {
+    return `cover: PASS; ${sizeText}${pointText}`;
   }
 
-  return `cover: gaps on ${gapSegments.slice(0, 6).join(', ')}${gapSegments.length > 6 ? ', ...' : ''}; ${sizeText}`;
+  const gapText = gapSegments.length > 0
+    ? `gaps on ${gapSegments.slice(0, 6).join(', ')}${gapSegments.length > 6 ? ', ...' : ''}`
+    : 'no segment gaps';
+  return `cover: ${gapText}; ${sizeText}${pointText}`;
 }
 
 function initializeFreeFromCurrentIfNeeded(): void {
@@ -1062,6 +1228,8 @@ function initializeFreeFromCurrentIfNeeded(): void {
   );
   const next = createDefaultFreeState();
   next.strictEps = getEffectiveStrictEps();
+  next.pointSeeds = freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
+  next.selectedPointSeedId = freeState.selectedPointSeedId;
   getTriangle(next, 'C').center = { ...triangleState.position };
   getTriangle(next, 'C').angle = triangleState.angle;
   for (const coverTriangle of result.vTriangles) {
@@ -1161,6 +1329,8 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
       ctx2d.fillText(`B${i}`, point.x + 7, point.y - 7);
     }
   }
+
+  drawSymmetricPoints(ctx2d, new Set(validation.pointFailures));
 
   for (const label of freeState.labels) {
     if (!label.point) {
@@ -1296,7 +1466,7 @@ function clampInteger(value: string | undefined, min: number, max: number): numb
 }
 
 function formatFreeSnapshot(): string {
-  return JSON.stringify({ ...freeState, version: 6 }, null, 2);
+  return JSON.stringify({ ...freeState, version: 7 }, null, 2);
 }
 
 type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
@@ -1304,6 +1474,7 @@ type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
   targetT?: number;
   targetTFixed?: boolean;
   targetTPoints?: unknown;
+  pointSeeds?: unknown;
 };
 
 function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
@@ -1323,7 +1494,7 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
 }
 
 function isFreeTool(value: unknown): value is FreeTool {
-  return value === 'move' || value === 'd-mark' || value === 's-mark' || value === 'sample';
+  return value === 'move' || value === 'd-mark' || value === 's-mark' || value === 'sample' || value === 'point';
 }
 
 function isFreeTarget(value: unknown): value is FreeTarget {
@@ -1439,7 +1610,7 @@ function normalizeTargetTRef(ref: FreeNamedPointRef | undefined): void {
 function loadFreeSnapshot(raw: string): void {
   const parsed = JSON.parse(raw) as RawFreeSnapshot;
   if (
-    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6) ||
+    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7) ||
     !Array.isArray(parsed.triangles) ||
     parsed.triangles.length !== 7
   ) {
@@ -1465,6 +1636,11 @@ function loadFreeSnapshot(raw: string): void {
     throw new Error('Invalid free snapshot labels.');
   }
   const defaults = createDefaultFreeState();
+  const pointSeeds = sanitizePointSeeds(parsed.pointSeeds);
+  const selectedPointSeedId = typeof parsed.selectedPointSeedId === 'string' &&
+    pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
+    ? parsed.selectedPointSeedId
+    : null;
   freeState = {
     ...defaults,
     ...parsed,
@@ -1484,7 +1660,9 @@ function loadFreeSnapshot(raw: string): void {
     })) as FreeState['triangles'],
     labels,
     selectedSegments: [],
-    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
+    pointSeeds,
+    selectedPointSeedId,
+    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 || parsed.version === 7 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
   } as FreeState;
   delete (freeState as RawFreeSnapshot).targetT;
   delete (freeState as RawFreeSnapshot).targetTFixed;
@@ -1567,6 +1745,9 @@ function setFreeTool(nextTool: FreeTool): void {
     freeState.status = 'D-mark mode: click two intersecting segments.';
   } else if (nextTool === 's-mark') {
     freeState.status = 'S-mark mode: click two intersecting segments.';
+  } else if (nextTool === 'point') {
+    freeState.selectedSegments = [];
+    freeState.status = 'Point mode: click inside the hexagon to add a seed; drag seed handles to move them.';
   } else {
     freeState.status = 'Move mode: drag selected triangles.';
   }
@@ -1879,9 +2060,16 @@ function renderFreePanel(validation: FreeValidationResult): void {
         </span>
       `).join('')}`
     : '';
-  const toolButtons = (['move', 'd-mark', 's-mark', 'sample'] as FreeTool[]).map((tool) =>
+  const toolButtons = (['move', 'd-mark', 's-mark', 'sample', 'point'] as FreeTool[]).map((tool) =>
     `<button type="button" class="free-button${freeState.tool === tool ? ' is-active' : ''}" data-free-tool="${tool}">${tool}</button>`,
   ).join('');
+  const pointControls = `
+    <div class="free-toolbar">
+      points
+      <button type="button" class="free-button" data-delete-point-seed${freeState.selectedPointSeedId ? '' : ' disabled'}>delete selected</button>
+      <button type="button" class="free-button" data-clear-point-seeds${freeState.pointSeeds.length > 0 ? '' : ' disabled'}>clear</button>
+      <span class="free-small-status">${escapeHtml(pointSeedStatusText())}</span>
+    </div>`;
   const statuses = new Map(validation.constraintStatuses.map((status) => [status.triangleId, status]));
 
   const triangleRows = freeState.triangles.map((triangle) => {
@@ -1948,6 +2136,7 @@ function renderFreePanel(validation: FreeValidationResult): void {
   freeControls.innerHTML = `
     <div class="free-toolbar">target ${targetButtons}${targetTControls}</div>
     <div class="free-toolbar">tool ${toolButtons}</div>
+    ${pointControls}
     ${renderSamplingPanel()}
     <div class="free-row"><span>${freeState.status}</span></div>
     ${triangleRows}
@@ -2120,6 +2309,16 @@ function isCoverOverlayAvailable(): boolean {
   return shapeMode !== 'free' && shapeMode !== 'ab-union';
 }
 
+function syncPointToolControls(): void {
+  normalizeSelectedPointSeed();
+  const visible = shapeMode !== 'free' && shapeMode !== 'ab-union';
+  pointToolPanel.hidden = !visible;
+  pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
+  pointDeleteButton.disabled = !freeState.selectedPointSeedId;
+  pointClearButton.disabled = freeState.pointSeeds.length === 0;
+  pointToolStatus.textContent = pointSeedStatusText();
+}
+
 function syncModeButtons(): void {
   if (shapeMode === 'triangle') {
     shapeTitle.textContent = 'C-triangle';
@@ -2149,6 +2348,7 @@ function syncModeButtons(): void {
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
   coverOverlayToggleRow.classList.toggle('is-disabled', !isCoverOverlayAvailable());
+  syncPointToolControls();
 }
 
 function setAdmissibleStatus(text: string, isError = false): void {
@@ -2204,6 +2404,7 @@ function applyAdmissibleEditorSource(): void {
 }
 
 function render(): void {
+  syncPointToolControls();
   if (shapeMode === 'free') {
     initializeFreeFromCurrentIfNeeded();
     syncFreeStrictEps();
@@ -2275,7 +2476,8 @@ function render(): void {
   const ce = shapeMode === 'triangle' ? getCPerimeterIntersections(triangleState) : null;
   const chain = buildChainDescriptor(localCs, ce);
   currentChain = chain;
-  const coverResult = isCoverOverlayAvailable() && showCoverOverlay
+  const needsPointCoverage = freeState.pointSeeds.length > 0;
+  const coverResult = isCoverOverlayAvailable() && (showCoverOverlay || needsPointCoverage)
     ? computeCoverResult(
         triangleState,
         chain.localCs,
@@ -2286,11 +2488,12 @@ function render(): void {
         shapeMode === 'triangle',
       )
     : null;
+  const pointCoverage = computeNonFreePointCoverage(coverResult);
   syncCeControls(ce);
 
   ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
   drawHexagon(ctx);
-  if (coverResult) {
+  if (coverResult && showCoverOverlay) {
     drawCoverTriangleOverlay(ctx, coverResult.vTriangles);
   }
   drawSelectedHalfDiagonals(ctx, selectedHalfDiagonalIndices);
@@ -2300,6 +2503,7 @@ function render(): void {
     drawControlPoint(ctx, triangleState);
     drawCeIntervals(ctx, ce?.intervals ?? [], chain.selectedInterval);
   }
+  drawSymmetricPoints(ctx, new Set(pointCoverage.failures));
 
   if (shapeMode === 'local-c') {
     gammaValues.textContent = 'manual c_i mode';
@@ -2318,10 +2522,15 @@ function render(): void {
   ceChainStatus.textContent = summarizeCeChain(chain);
   ceChainStatus.style.color = chain.passes === null ? '#475569' : chain.passes ? '#047857' : '#b91c1c';
   drawPropagationMarkers(ctx, chain);
-  if (coverResult) {
+  if (coverResult && showCoverOverlay) {
     drawCoverageGaps(ctx, coverResult.segments);
-    coverOverlayStatus.textContent = summarizeCoverResult(coverResult);
-    coverOverlayStatus.style.color = coverResult.coverageOk && coverResult.tooLargeTriangles.length === 0
+    coverOverlayStatus.textContent = summarizeCoverResult(coverResult, pointCoverage);
+    coverOverlayStatus.style.color = coverResult.coverageOk && pointCoverage.failures.length === 0 && coverResult.tooLargeTriangles.length === 0
+      ? '#047857'
+      : '#b91c1c';
+  } else if (coverResult) {
+    coverOverlayStatus.textContent = summarizeCoverResult(coverResult, pointCoverage);
+    coverOverlayStatus.style.color = coverResult.coverageOk && pointCoverage.failures.length === 0 && coverResult.tooLargeTriangles.length === 0
       ? '#047857'
       : '#b91c1c';
   } else if (!isCoverOverlayAvailable()) {
@@ -2389,6 +2598,22 @@ strictEpsMaxInput.addEventListener('change', () => {
 coverOverlayToggle.addEventListener('change', () => {
   showCoverOverlay = coverOverlayToggle.checked && isCoverOverlayAvailable();
   syncModeButtons();
+  render();
+});
+
+pointToolToggle.addEventListener('click', () => {
+  pointToolActive = !pointToolActive;
+  syncPointToolControls();
+  render();
+});
+
+pointDeleteButton.addEventListener('click', () => {
+  deleteSelectedPointSeed();
+  render();
+});
+
+pointClearButton.addEventListener('click', () => {
+  clearPointSeeds();
   render();
 });
 
@@ -2473,6 +2698,18 @@ freeControls.addEventListener('click', (event) => {
     currentV0Sample = null;
     currentCSample = null;
     freeState.status = 'Cleared sampling data.';
+    render();
+    return;
+  }
+  const deletePointSeedButton = target.closest<HTMLButtonElement>('[data-delete-point-seed]');
+  if (deletePointSeedButton) {
+    deleteSelectedPointSeed();
+    render();
+    return;
+  }
+  const clearPointSeedsButton = target.closest<HTMLButtonElement>('[data-clear-point-seeds]');
+  if (clearPointSeedsButton) {
+    clearPointSeeds();
     render();
     return;
   }
@@ -2832,6 +3069,13 @@ setupInteraction(
   (index) => {
     toggleSelectedHalfDiagonal(index);
     render();
+  },
+  {
+    isActive: () => pointToolActive,
+    seeds: () => freeState.pointSeeds,
+    create: addPointSeed,
+    move: movePointSeed,
+    select: selectPointSeed,
   },
 );
 

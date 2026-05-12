@@ -19,6 +19,7 @@ This repository contains a Vite + TypeScript web app for exploring unit equilate
 - `src/hexagon.ts`: hexagon boundary and main diagonals
 - `src/coords.ts`: math-to-canvas coordinate transforms
 - `src/geometry.ts`: pure geometric helpers
+- `src/symmetricPoints.ts`: D6 point-seed orbit helpers
 - `src/types.ts`: shared types
 - `src/style.css`: layout and control styling
 - `experiments/`: NumPy scripts for professor-facing numerical checks
@@ -28,6 +29,9 @@ This repository contains a Vite + TypeScript web app for exploring unit equilate
 - The left canvas shows the C-triangle or manual `c_i` controls.
 - The right canvas shows `g_c`, pair compositions, or the six-step composition.
 - Strict mode exposes `strictEps` and updates the admissible-set checks and local `c` bounds.
+- The point tool is available in Triangle, `c_i`, Circle, and Free modes.  A click inside the hexagon creates a seed point; each seed contributes its de-duplicated D6 orbit to the coverability check.  Seed handles can be dragged, deleted, or cleared.  Clicks and drags outside the hexagon are ignored.
+- D6 points are covered by the active mode's coverers: C-triangle plus generated V-triangles in Triangle mode, generated V-triangles in `c_i` mode, C-circle plus generated V-triangles in Circle mode, and all seven placed triangles in Free mode.
+- Point seeds are included in the Controller State JSON and in the Free State JSON.
 
 ## `ab union` mode
 
