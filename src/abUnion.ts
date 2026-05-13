@@ -25,6 +25,7 @@ const LOCAL_C_HIT_PX = 8;
 const LOCAL_C_RAY_HIT_PX = 10;
 const CONTROL_POINT_HIT_PX = 8;
 const BORDER_HIT_PX = 6;
+const MARK_HIT_PX = 9;
 const CLICK_CANCEL_PX = 6;
 const PEN_HIT_SCALE = 1.35;
 const TOUCH_HIT_SCALE = 1.75;
@@ -39,8 +40,15 @@ const FAR_PAIR_DIRECTIONS = Array.from({ length: 48 }, (_, index) => {
 export type AbUnionCenterMode = 'none' | 'triangle' | 'circle' | 'local-c';
 export type AbUnionQuality = 'coarse' | 'high' | 'adaptive';
 export type AbUnionPreset = 'equality' | 'midpoint';
-export type AbUnionTool = 'move' | 'add' | 'delete';
+export type AbUnionTool = 'move' | 'add' | 'delete' | 'd-mark' | 's-mark';
 export type AbUnionLockKind = 'a' | 'b';
+export type AbUnionLabelMode = 'dynamic' | 'static';
+export type AbUnionCoincidenceRole = 'shared' | 'left' | 'right';
+export type AbUnionMarkSourceKind =
+  | 'hex-edge'
+  | 'half-diagonal'
+  | 'center-triangle-edge'
+  | 'center-circle';
 
 export interface AbUnionEdgeDots {
   left: number;
@@ -48,11 +56,39 @@ export interface AbUnionEdgeDots {
   split: boolean;
 }
 
+export interface AbUnionMarkSourceRef {
+  kind: AbUnionMarkSourceKind;
+  index: number;
+}
+
+export interface AbUnionLabel {
+  id: string;
+  name: string;
+  mode: AbUnionLabelMode;
+  first: AbUnionMarkSourceRef | null;
+  second: AbUnionMarkSourceRef | null;
+  point: Point | null;
+}
+
+export interface AbUnionCoincidenceLock {
+  labelId: string;
+  edge: number;
+  role: AbUnionCoincidenceRole;
+}
+
+export interface AbUnionCoincidenceTarget {
+  edge: number;
+  role: AbUnionCoincidenceRole;
+  label: string;
+  locked: boolean;
+}
+
 export interface AbUnionState {
   edgeDots: AbUnionEdgeDots[];
   tool: AbUnionTool;
   theta: number;
   centerMode: AbUnionCenterMode;
+  centerLocked: boolean;
   quality: AbUnionQuality;
   showRegion: boolean;
   showThetaTriangle: boolean;
@@ -62,6 +98,10 @@ export interface AbUnionState {
   aLocked: boolean[];
   bLocked: boolean[];
   activeRegions: boolean[];
+  labels: AbUnionLabel[];
+  selectedMarkSources: AbUnionMarkSourceRef[];
+  coincidenceLocks: AbUnionCoincidenceLock[];
+  status: string;
   lastOptimized: AbUnionOptimization | null;
 }
 
@@ -150,6 +190,10 @@ type AbUnionHitTarget =
   | { kind: 'center-control' }
   | { kind: 'center-border' }
   | { kind: 'center-interior' };
+
+type AbUnionMarkPrimitive =
+  | { kind: 'line'; ref: AbUnionMarkSourceRef; label: string; start: Point; end: Point }
+  | { kind: 'circle'; ref: AbUnionMarkSourceRef; label: string; center: Point; radius: number };
 
 const cacheBySize = new Map<number, MaskCache>();
 
@@ -520,6 +564,355 @@ function localCHull(localCs: number[]): Point[] {
   return convexHull(localCs.map((value, index) => localCPoint(index, value)));
 }
 
+function sameMarkSource(a: AbUnionMarkSourceRef, b: AbUnionMarkSourceRef): boolean {
+  return a.kind === b.kind && a.index === b.index;
+}
+
+function markSourceLabel(ref: AbUnionMarkSourceRef): string {
+  if (ref.kind === 'hex-edge') return `e${ref.index}`;
+  if (ref.kind === 'half-diagonal') return `r${ref.index}`;
+  if (ref.kind === 'center-triangle-edge') return `C:e${ref.index}`;
+  return 'C:circle';
+}
+
+function isCenterMarkSource(ref: AbUnionMarkSourceRef): boolean {
+  return ref.kind === 'center-triangle-edge' || ref.kind === 'center-circle';
+}
+
+function isSkeletonMarkSource(ref: AbUnionMarkSourceRef): boolean {
+  return ref.kind === 'hex-edge' || ref.kind === 'half-diagonal';
+}
+
+function hexEdgeSource(label: AbUnionLabel): number | null {
+  if (label.first?.kind === 'hex-edge') return label.first.index;
+  if (label.second?.kind === 'hex-edge') return label.second.index;
+  return null;
+}
+
+function markPrimitiveForRef(
+  ref: AbUnionMarkSourceRef,
+  state: AbUnionState,
+  triangleState: TriangleState,
+): AbUnionMarkPrimitive | null {
+  const index = ref.index;
+  if (ref.kind === 'hex-edge') {
+    if (!Number.isInteger(index) || index < 0 || index >= 6) return null;
+    return {
+      kind: 'line',
+      ref,
+      label: markSourceLabel(ref),
+      start: HEXAGON_VERTICES[index],
+      end: HEXAGON_VERTICES[mod6(index + 1)],
+    };
+  }
+  if (ref.kind === 'half-diagonal') {
+    if (!Number.isInteger(index) || index < 0 || index >= 6) return null;
+    return {
+      kind: 'line',
+      ref,
+      label: markSourceLabel(ref),
+      start: { x: 0, y: 0 },
+      end: HEXAGON_VERTICES[index],
+    };
+  }
+  if (ref.kind === 'center-triangle-edge') {
+    if (state.centerMode !== 'triangle' || !Number.isInteger(index) || index < 0 || index >= 3) return null;
+    const vertices = getVertices(triangleState);
+    return {
+      kind: 'line',
+      ref,
+      label: markSourceLabel(ref),
+      start: vertices[index],
+      end: vertices[(index + 1) % 3],
+    };
+  }
+  if (ref.kind === 'center-circle') {
+    if (state.centerMode !== 'circle') return null;
+    return {
+      kind: 'circle',
+      ref,
+      label: markSourceLabel(ref),
+      center: triangleState.position,
+      radius: CIRCUMRADIUS,
+    };
+  }
+  return null;
+}
+
+function segmentIntersectionPoints(a: Extract<AbUnionMarkPrimitive, { kind: 'line' }>, b: Extract<AbUnionMarkPrimitive, { kind: 'line' }>): Point[] {
+  const r = { x: a.end.x - a.start.x, y: a.end.y - a.start.y };
+  const s = { x: b.end.x - b.start.x, y: b.end.y - b.start.y };
+  const denom = r.x * s.y - r.y * s.x;
+  if (Math.abs(denom) < EPS) return [];
+  const q = { x: b.start.x - a.start.x, y: b.start.y - a.start.y };
+  const t = (q.x * s.y - q.y * s.x) / denom;
+  const u = (q.x * r.y - q.y * r.x) / denom;
+  if (t < -EPS || t > 1 + EPS || u < -EPS || u > 1 + EPS) return [];
+  return [{ x: a.start.x + clamp01(t) * r.x, y: a.start.y + clamp01(t) * r.y }];
+}
+
+function lineCircleIntersectionPoints(
+  line: Extract<AbUnionMarkPrimitive, { kind: 'line' }>,
+  circle: Extract<AbUnionMarkPrimitive, { kind: 'circle' }>,
+): Point[] {
+  const d = { x: line.end.x - line.start.x, y: line.end.y - line.start.y };
+  const f = { x: line.start.x - circle.center.x, y: line.start.y - circle.center.y };
+  const a = d.x * d.x + d.y * d.y;
+  const b = 2 * (f.x * d.x + f.y * d.y);
+  const c = f.x * f.x + f.y * f.y - circle.radius * circle.radius;
+  const disc = b * b - 4 * a * c;
+  if (a < EPS || disc < -EPS) return [];
+  const sqrtDisc = Math.sqrt(Math.max(0, disc));
+  const values = [(-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a)];
+  const points: Point[] = [];
+  for (const value of values) {
+    if (value < -EPS || value > 1 + EPS) continue;
+    const point = { x: line.start.x + clamp01(value) * d.x, y: line.start.y + clamp01(value) * d.y };
+    if (!points.some((existing) => distance(existing, point) <= EPS)) points.push(point);
+  }
+  return points;
+}
+
+function circleCircleIntersectionPoints(
+  a: Extract<AbUnionMarkPrimitive, { kind: 'circle' }>,
+  b: Extract<AbUnionMarkPrimitive, { kind: 'circle' }>,
+): Point[] {
+  const dx = b.center.x - a.center.x;
+  const dy = b.center.y - a.center.y;
+  const d = Math.hypot(dx, dy);
+  if (d < EPS || d > a.radius + b.radius + EPS || d < Math.abs(a.radius - b.radius) - EPS) return [];
+  const along = (a.radius * a.radius - b.radius * b.radius + d * d) / (2 * d);
+  const h2 = a.radius * a.radius - along * along;
+  if (h2 < -EPS) return [];
+  const h = Math.sqrt(Math.max(0, h2));
+  const ux = dx / d;
+  const uy = dy / d;
+  const base = { x: a.center.x + along * ux, y: a.center.y + along * uy };
+  if (h <= EPS) return [base];
+  return [
+    { x: base.x - uy * h, y: base.y + ux * h },
+    { x: base.x + uy * h, y: base.y - ux * h },
+  ];
+}
+
+function distanceToMarkPrimitive(point: Point, primitive: AbUnionMarkPrimitive): number {
+  if (primitive.kind === 'line') return distanceToSegment(point, primitive.start, primitive.end);
+  return Math.abs(distance(point, primitive.center) - primitive.radius);
+}
+
+function closestPoint(points: Point[], preferred: Point | null): Point | null {
+  if (points.length === 0) return null;
+  if (!preferred) return points[0];
+  let best = points[0];
+  let bestDistance = distance(best, preferred);
+  for (let i = 1; i < points.length; i++) {
+    const d = distance(points[i], preferred);
+    if (d < bestDistance) {
+      best = points[i];
+      bestDistance = d;
+    }
+  }
+  return best;
+}
+
+function intersectionPoint(
+  first: AbUnionMarkPrimitive,
+  second: AbUnionMarkPrimitive,
+  preferred: Point | null,
+): Point | null {
+  if (first.kind === 'line' && second.kind === 'line') {
+    return closestPoint(segmentIntersectionPoints(first, second), preferred);
+  }
+  if (first.kind === 'line' && second.kind === 'circle') {
+    return closestPoint(lineCircleIntersectionPoints(first, second), preferred);
+  }
+  if (first.kind === 'circle' && second.kind === 'line') {
+    return closestPoint(lineCircleIntersectionPoints(second, first), preferred);
+  }
+  if (first.kind === 'circle' && second.kind === 'circle') {
+    return closestPoint(circleCircleIntersectionPoints(first, second), preferred);
+  }
+  return null;
+}
+
+function nextLabelId(state: AbUnionState, mode: AbUnionLabelMode): string {
+  const prefix = mode === 'dynamic' ? 'D' : 'S';
+  const max = state.labels.reduce((currentMax, label) => {
+    if (label.mode !== mode || !label.id.startsWith(prefix)) return currentMax;
+    const value = Number.parseInt(label.id.slice(prefix.length), 10);
+    return Number.isFinite(value) ? Math.max(currentMax, value) : currentMax;
+  }, 0);
+  return `${prefix}${max + 1}`;
+}
+
+function createAbUnionLabel(
+  state: AbUnionState,
+  first: AbUnionMarkSourceRef,
+  second: AbUnionMarkSourceRef,
+  mode: AbUnionLabelMode,
+  preferred: Point,
+  triangleState: TriangleState,
+): AbUnionLabel | null {
+  const hasCenterAndSkeleton = (
+    (isCenterMarkSource(first) && isSkeletonMarkSource(second)) ||
+    (isSkeletonMarkSource(first) && isCenterMarkSource(second))
+  );
+  if (!hasCenterAndSkeleton) return null;
+
+  const firstPrimitive = markPrimitiveForRef(first, state, triangleState);
+  const secondPrimitive = markPrimitiveForRef(second, state, triangleState);
+  if (!firstPrimitive || !secondPrimitive) return null;
+  const point = intersectionPoint(firstPrimitive, secondPrimitive, preferred);
+  if (!point) return null;
+  const id = nextLabelId(state, mode);
+  return {
+    id,
+    name: id,
+    mode,
+    first,
+    second,
+    point,
+  };
+}
+
+function refreshAbUnionLabels(
+  state: AbUnionState,
+  triangleState: TriangleState,
+): void {
+  for (const label of state.labels) {
+    if (label.mode === 'static') continue;
+    if (!label.first || !label.second) {
+      label.point = null;
+      continue;
+    }
+    const first = markPrimitiveForRef(label.first, state, triangleState);
+    const second = markPrimitiveForRef(label.second, state, triangleState);
+    label.point = first && second ? intersectionPoint(first, second, label.point) : null;
+  }
+}
+
+export function deleteAbUnionLabel(state: AbUnionState, id: string): void {
+  normalizeAbUnionState(state);
+  state.labels = state.labels.filter((label) => label.id !== id);
+  state.coincidenceLocks = state.coincidenceLocks.filter((lock) => lock.labelId !== id);
+  state.status = `Deleted ${id}.`;
+}
+
+function sameCoincidenceTarget(
+  lock: AbUnionCoincidenceLock,
+  edge: number,
+  role: AbUnionCoincidenceRole,
+): boolean {
+  return mod6(lock.edge) === mod6(edge) && lock.role === role;
+}
+
+function labelForId(state: AbUnionState, labelId: string): AbUnionLabel | null {
+  return state.labels.find((label) => label.id === labelId) ?? null;
+}
+
+function applyCoincidenceTarget(
+  state: AbUnionState,
+  edge: number,
+  role: AbUnionCoincidenceRole,
+  point: Point,
+): void {
+  const normalizedEdge = mod6(edge);
+  const value = projectEdgeValue(point, normalizedEdge);
+  const dots = state.edgeDots[normalizedEdge];
+  if (
+    (role === 'left' && Math.abs(dots.left - value) <= EPS) ||
+    (role === 'right' && Math.abs(dots.right - value) <= EPS) ||
+    (role === 'shared' && Math.abs(dots.left - value) <= EPS && Math.abs(dots.right - value) <= EPS)
+  ) {
+    return;
+  }
+  setDotValue(state, { edge: normalizedEdge, role }, value);
+}
+
+export function abUnionCoincidenceTargets(
+  state: AbUnionState,
+  labelId: string,
+): AbUnionCoincidenceTarget[] {
+  normalizeAbUnionState(state);
+  const label = labelForId(state, labelId);
+  if (!label) return [];
+  const edge = hexEdgeSource(label);
+  if (edge === null) return [];
+  const dot = state.edgeDots[mod6(edge)];
+  const roles: AbUnionCoincidenceRole[] = dot.split ? ['left', 'right'] : ['shared'];
+  return roles.map((role) => ({
+    edge: mod6(edge),
+    role,
+    label: role === 'left' ? `b${edge}` : role === 'right' ? `a${mod6(edge + 1)}` : 'shared',
+    locked: state.coincidenceLocks.some((lock) =>
+      lock.labelId === labelId && sameCoincidenceTarget(lock, edge, role),
+    ),
+  }));
+}
+
+export function snapAbUnionLabelToEdge(
+  state: AbUnionState,
+  labelId: string,
+  edge: number,
+  role: AbUnionCoincidenceRole,
+): void {
+  normalizeAbUnionState(state);
+  const label = labelForId(state, labelId);
+  if (!label?.point || hexEdgeSource(label) !== mod6(edge)) return;
+  applyCoincidenceTarget(state, edge, role, label.point);
+  state.status = `Snapped ${role === 'shared' ? 'shared dot' : role} on e${mod6(edge)} to ${label.name}.`;
+}
+
+export function setAbUnionCoincidenceLock(
+  state: AbUnionState,
+  labelId: string,
+  edge: number,
+  role: AbUnionCoincidenceRole,
+  locked: boolean,
+): void {
+  normalizeAbUnionState(state);
+  state.coincidenceLocks = state.coincidenceLocks.filter((lock) => locked
+    ? !sameCoincidenceTarget(lock, edge, role)
+    : !(lock.labelId === labelId && sameCoincidenceTarget(lock, edge, role)),
+  );
+  if (!locked) {
+    state.status = `Unlocked ${role === 'shared' ? 'shared dot' : role} on e${mod6(edge)}.`;
+    return;
+  }
+  const label = labelForId(state, labelId);
+  if (!label || hexEdgeSource(label) !== mod6(edge)) return;
+  state.coincidenceLocks.push({ labelId, edge: mod6(edge), role });
+  if (label.point) {
+    applyCoincidenceTarget(state, edge, role, label.point);
+  }
+  state.status = `Locked ${role === 'shared' ? 'shared dot' : role} on e${mod6(edge)} to ${label.name}.`;
+}
+
+function applyAbUnionCoincidenceLocks(state: AbUnionState): void {
+  for (const lock of state.coincidenceLocks) {
+    const label = labelForId(state, lock.labelId);
+    if (!label?.point || hexEdgeSource(label) !== mod6(lock.edge)) continue;
+    applyCoincidenceTarget(state, lock.edge, lock.role, label.point);
+  }
+}
+
+export function setAbUnionTool(state: AbUnionState, tool: AbUnionTool): void {
+  normalizeAbUnionState(state);
+  state.tool = tool;
+  state.selectedMarkSources = [];
+  if (tool === 'd-mark') {
+    state.status = 'D-mark mode: click two intersecting sources.';
+  } else if (tool === 's-mark') {
+    state.status = 'S-mark mode: click two intersecting sources.';
+  } else if (tool === 'add') {
+    state.status = 'Add mode: click an edge or one-dot handle.';
+  } else if (tool === 'delete') {
+    state.status = 'Delete mode: click a split-dot handle.';
+  } else {
+    state.status = 'Move mode: drag edge dots or center geometry.';
+  }
+}
+
 function centerContainsPoint(
   point: Point,
   state: AbUnionState,
@@ -777,6 +1170,57 @@ function drawActiveBoundaries(ctx: CanvasRenderingContext2D, cache: MaskCache, s
   }
 }
 
+function drawMarkPrimitive(
+  ctx: CanvasRenderingContext2D,
+  primitive: AbUnionMarkPrimitive,
+): void {
+  ctx.save();
+  ctx.strokeStyle = '#facc15';
+  ctx.lineWidth = 5.2;
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = 0.82;
+  ctx.beginPath();
+  if (primitive.kind === 'line') {
+    const start = mathToCanvas(primitive.start);
+    const end = mathToCanvas(primitive.end);
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+  } else {
+    const center = mathToCanvas(primitive.center);
+    ctx.arc(center.x, center.y, scaleToCanvas(primitive.radius), 0, 2 * Math.PI);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawSelectedMarkSources(
+  ctx: CanvasRenderingContext2D,
+  state: AbUnionState,
+  triangleState: TriangleState,
+): void {
+  for (const source of state.selectedMarkSources) {
+    const primitive = markPrimitiveForRef(source, state, triangleState);
+    if (primitive) drawMarkPrimitive(ctx, primitive);
+  }
+}
+
+function drawAbUnionLabels(ctx: CanvasRenderingContext2D, state: AbUnionState): void {
+  ctx.save();
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const label of state.labels) {
+    if (!label.point) continue;
+    const point = mathToCanvas(label.point);
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#2563eb';
+    ctx.fill();
+    ctx.fillText(label.name, point.x + 6, point.y - 6);
+  }
+  ctx.restore();
+}
+
 function drawPointsAndVertices(ctx: CanvasRenderingContext2D, state: AbUnionState): void {
   ctx.save();
   ctx.font = '12px monospace';
@@ -853,6 +1297,57 @@ function normalizeLockArray(value: boolean[] | undefined): boolean[] {
   return Array.from({ length: 6 }, (_, index) => Boolean(value?.[index]));
 }
 
+function normalizeMarkSource(value: unknown): AbUnionMarkSourceRef | null {
+  if (!value || typeof value !== 'object') return null;
+  const ref = value as Partial<AbUnionMarkSourceRef>;
+  if (
+    ref.kind !== 'hex-edge' &&
+    ref.kind !== 'half-diagonal' &&
+    ref.kind !== 'center-triangle-edge' &&
+    ref.kind !== 'center-circle'
+  ) {
+    return null;
+  }
+  if (typeof ref.index !== 'number' || !Number.isInteger(ref.index) || ref.index < 0) return null;
+  return { kind: ref.kind, index: ref.index };
+}
+
+function normalizeLabels(value: unknown): AbUnionLabel[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate): AbUnionLabel[] => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const label = candidate as Partial<AbUnionLabel>;
+    if (typeof label.id !== 'string' || typeof label.name !== 'string') return [];
+    if (label.mode !== 'dynamic' && label.mode !== 'static') return [];
+    const point = label.point && typeof label.point.x === 'number' && typeof label.point.y === 'number'
+      ? { x: label.point.x, y: label.point.y }
+      : null;
+    const first = normalizeMarkSource(label.first);
+    const second = normalizeMarkSource(label.second);
+    if (label.mode === 'static') {
+      if (!point) return [];
+      return [{ id: label.id, name: label.name, mode: label.mode, first, second, point }];
+    }
+    if (!first || !second) return [];
+    return [{ id: label.id, name: label.name, mode: label.mode, first, second, point }];
+  });
+}
+
+function normalizeCoincidenceLocks(value: unknown, labels: AbUnionLabel[]): AbUnionCoincidenceLock[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set(labels.map((label) => label.id));
+  return value.flatMap((candidate): AbUnionCoincidenceLock[] => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const lock = candidate as Partial<AbUnionCoincidenceLock>;
+    if (typeof lock.labelId !== 'string' || !ids.has(lock.labelId)) return [];
+    if (typeof lock.edge !== 'number' || !Number.isInteger(lock.edge)) return [];
+    if (lock.role !== 'shared' && lock.role !== 'left' && lock.role !== 'right') return [];
+    const label = labels.find((current) => current.id === lock.labelId);
+    if (!label || hexEdgeSource(label) !== mod6(lock.edge)) return [];
+    return [{ labelId: lock.labelId, edge: mod6(lock.edge), role: lock.role }];
+  });
+}
+
 function normalizeAbUnionState(state: AbUnionState): void {
   const legacy = state as unknown as { b?: number[]; edgeDots?: AbUnionEdgeDots[]; tool?: AbUnionTool };
   const source = Array.isArray(legacy.edgeDots)
@@ -869,11 +1364,26 @@ function normalizeAbUnionState(state: AbUnionState): void {
       split: Boolean(edge.split),
     };
   });
-  state.tool = legacy.tool === 'add' || legacy.tool === 'delete' ? legacy.tool : 'move';
+  state.tool = legacy.tool === 'add' ||
+    legacy.tool === 'delete' ||
+    legacy.tool === 'd-mark' ||
+    legacy.tool === 's-mark'
+    ? legacy.tool
+    : 'move';
+  state.centerLocked = Boolean(state.centerLocked);
   state.regionVisible = Array.from({ length: 6 }, (_, index) => state.regionVisible?.[index] ?? true);
   state.aLocked = normalizeLockArray(state.aLocked);
   state.bLocked = normalizeLockArray(state.bLocked);
   state.activeRegions = normalizeLockArray(state.activeRegions);
+  state.labels = normalizeLabels(state.labels);
+  state.selectedMarkSources = Array.isArray(state.selectedMarkSources)
+    ? state.selectedMarkSources.flatMap((source) => {
+        const normalized = normalizeMarkSource(source);
+        return normalized ? [normalized] : [];
+      }).slice(-2)
+    : [];
+  state.coincidenceLocks = normalizeCoincidenceLocks(state.coincidenceLocks, state.labels);
+  state.status = typeof state.status === 'string' ? state.status : 'Move mode: drag edge dots or center geometry.';
 }
 
 function groupedIndices(locks: boolean[], index: number): number[] {
@@ -1082,6 +1592,7 @@ export function createDefaultAbUnionState(): AbUnionState {
     tool: 'move',
     theta: Math.PI / 6,
     centerMode: 'none',
+    centerLocked: false,
     quality: 'adaptive',
     showRegion: true,
     showThetaTriangle: true,
@@ -1091,6 +1602,10 @@ export function createDefaultAbUnionState(): AbUnionState {
     aLocked: Array(6).fill(false),
     bLocked: Array(6).fill(false),
     activeRegions: Array(6).fill(false),
+    labels: [],
+    selectedMarkSources: [],
+    coincidenceLocks: [],
+    status: 'Move mode: drag edge dots or center geometry.',
     lastOptimized: null,
   };
 }
@@ -1102,6 +1617,7 @@ export function setAbUnionPreset(state: AbUnionState, preset: AbUnionPreset): vo
     state.edgeDots = Array.from({ length: 6 }, () => defaultEdgeDots(0.5));
   }
   state.activeRegions = Array(6).fill(false);
+  state.selectedMarkSources = [];
   state.lastOptimized = null;
   normalizeAbUnionState(state);
   enforceAbUnionLocks(state);
@@ -1148,6 +1664,9 @@ export function renderAbUnion(
   normalizeAbUnionState(state);
   enforceAbUnionLocks(state);
   const cache = getMaskCache(config.canvasSize);
+  refreshAbUnionLabels(state, triangleState);
+  applyAbUnionCoincidenceLocks(state);
+  enforceAbUnionLocks(state);
   const uncoveredCount = buildMask(cache, state);
   ctx.drawImage(cache.offscreen, 0, 0, config.canvasSize, config.canvasSize);
   const thetaResult = computeThetaTriangle(cache, state.theta, state.quality);
@@ -1158,7 +1677,9 @@ export function renderAbUnion(
   drawCenterShape(ctx, state, triangleState, localCs);
   drawFarPair(ctx, farPair);
   drawActiveBoundaries(ctx, cache, state);
+  drawSelectedMarkSources(ctx, state, triangleState);
   drawPointsAndVertices(ctx, state);
+  drawAbUnionLabels(ctx, state);
   const containment = computeCenterContainment(cache, state, triangleState, localCs);
 
   return {
@@ -1294,6 +1815,9 @@ function hitCenterShape(
   if (state.centerMode === 'none') {
     return null;
   }
+  if (state.centerLocked) {
+    return null;
+  }
   const hitScale = getHitScale(pointerType);
   if (state.centerMode === 'local-c') {
     return hitLocalC(mouse, localCs, pointerType);
@@ -1312,6 +1836,45 @@ function hitCenterShape(
   if (borderDist <= scaleToMath(BORDER_HIT_PX * hitScale)) return { kind: 'center-border' };
   if (pointInTriangle(mouse, vertices[0], vertices[1], vertices[2])) return { kind: 'center-interior' };
   return null;
+}
+
+function selectableMarkPrimitives(
+  state: AbUnionState,
+  triangleState: TriangleState,
+): AbUnionMarkPrimitive[] {
+  if (state.centerMode !== 'triangle' && state.centerMode !== 'circle') return [];
+  const refs: AbUnionMarkSourceRef[] = [
+    ...Array.from({ length: 6 }, (_, index) => ({ kind: 'hex-edge', index }) as AbUnionMarkSourceRef),
+    ...Array.from({ length: 6 }, (_, index) => ({ kind: 'half-diagonal', index }) as AbUnionMarkSourceRef),
+  ];
+
+  if (state.centerMode === 'triangle') {
+    refs.push(...Array.from({ length: 3 }, (_, index) => ({ kind: 'center-triangle-edge', index }) as AbUnionMarkSourceRef));
+  } else if (state.centerMode === 'circle') {
+    refs.push({ kind: 'center-circle', index: 0 });
+  }
+
+  return refs.flatMap((ref) => {
+    const primitive = markPrimitiveForRef(ref, state, triangleState);
+    return primitive ? [primitive] : [];
+  });
+}
+
+function hitMarkSource(
+  mouse: Point,
+  state: AbUnionState,
+  triangleState: TriangleState,
+  pointerType: string,
+): AbUnionMarkSourceRef | null {
+  const limit = scaleToMath(MARK_HIT_PX * getHitScale(pointerType));
+  let best: { ref: AbUnionMarkSourceRef; distance: number } | null = null;
+  for (const primitive of selectableMarkPrimitives(state, triangleState)) {
+    const d = distanceToMarkPrimitive(mouse, primitive);
+    if (d <= limit && (!best || d < best.distance)) {
+      best = { ref: primitive.ref, distance: d };
+    }
+  }
+  return best?.ref ?? null;
 }
 
 function hitTest(
@@ -1365,6 +1928,37 @@ function handleClick(state: AbUnionState, hit: AbUnionHitTarget | null): void {
   }
 }
 
+function selectMarkSource(
+  state: AbUnionState,
+  ref: AbUnionMarkSourceRef,
+  mode: AbUnionLabelMode,
+  preferred: Point,
+  triangleState: TriangleState,
+): void {
+  normalizeAbUnionState(state);
+  if (state.selectedMarkSources.some((selected) => sameMarkSource(selected, ref))) {
+    state.selectedMarkSources = state.selectedMarkSources.filter((selected) => !sameMarkSource(selected, ref));
+    state.status = 'Mark source unselected.';
+    return;
+  }
+
+  const next = [...state.selectedMarkSources, ref].slice(-2);
+  state.selectedMarkSources = next;
+  if (next.length < 2) {
+    state.status = `Selected ${markSourceLabel(ref)}; choose one more source.`;
+    return;
+  }
+
+  const label = createAbUnionLabel(state, next[0], next[1], mode, preferred, triangleState);
+  state.selectedMarkSources = [];
+  if (!label) {
+    state.status = 'Selected sources do not intersect.';
+    return;
+  }
+  state.labels.push(label);
+  state.status = `Created label ${label.name}.`;
+}
+
 function updateCursor(
   canvas: HTMLCanvasElement,
   hit: AbUnionHitTarget | null,
@@ -1415,6 +2009,23 @@ export function setupAbUnionInteraction(
     const pointerType = event.pointerType || 'mouse';
     const mouse = getPointerMath(canvas, event);
     const state = getState();
+
+    if (state.tool === 'd-mark' || state.tool === 's-mark') {
+      const source = hitMarkSource(mouse, state, triangleState, pointerType);
+      if (source) {
+        selectMarkSource(
+          state,
+          source,
+          state.tool === 's-mark' ? 'static' : 'dynamic',
+          mouse,
+          triangleState,
+        );
+        render();
+        event.preventDefault();
+      }
+      return;
+    }
+
     const hit = hitTest(mouse, state, triangleState, getLocalCs(), pointerType);
 
     if (state.tool === 'add' && (hit?.kind === 'edge' || hit?.kind === 'dot')) {
@@ -1479,6 +2090,11 @@ export function setupAbUnionInteraction(
     const state = getState();
 
     if (interaction.kind === 'idle') {
+      if (state.tool === 'd-mark' || state.tool === 's-mark') {
+        const source = hitMarkSource(mouse, state, triangleState, pointerType);
+        canvas.style.cursor = source ? 'crosshair' : 'default';
+        return;
+      }
       updateCursor(canvas, hitTest(mouse, state, triangleState, getLocalCs(), pointerType), state.centerMode, state.tool);
       return;
     }

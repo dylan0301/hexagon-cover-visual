@@ -16,3 +16,13 @@ make default setting
 show red pair > 1
 and center none
 
+for the center, whether it is triangle or circle or manual c_i,
+make a lock checkbox to lock it
+also make d mark and s mark just as we did in free mode
+the intersections can be the c trianlge, hexagon diagonals and edges, and the ab union boundary curves.
+ask me questions
+
+roll back the mark for ab union boundary curve.
+make it only able to mark the intersectino between center triangle or circle.
+then make it able to conincide a point on edge to the marked point
+ask me questions

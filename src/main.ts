@@ -96,18 +96,25 @@ import {
   type VSample,
 } from './halfSkeletonFrontier';
 import {
+  abUnionCoincidenceTargets,
   abUnionAValues,
   abUnionBValues,
   createDefaultAbUnionState,
+  deleteAbUnionLabel,
   optimizeAbUnionTheta,
   renderAbUnion,
+  setAbUnionCoincidenceLock,
   setAbUnionLock,
   setAbUnionPreset,
+  setAbUnionTool,
+  snapAbUnionLabelToEdge,
   setupAbUnionInteraction,
   type AbUnionCenterMode,
+  type AbUnionCoincidenceRole,
   type AbUnionPreset,
   type AbUnionQuality,
   type AbUnionRenderResult,
+  type AbUnionTool,
 } from './abUnion';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -1498,6 +1505,10 @@ function isFreeTool(value: unknown): value is FreeTool {
   return value === 'move' || value === 'd-mark' || value === 's-mark' || value === 'sample' || value === 'point';
 }
 
+function isAbUnionCoincidenceRole(value: unknown): value is AbUnionCoincidenceRole {
+  return value === 'shared' || value === 'left' || value === 'right';
+}
+
 function isFreeTarget(value: unknown): value is FreeTarget {
   return value === 'S_HALF' || value === 'S_T' || value === 'S' || value === 'BENZENE' || value === 'LOTUS';
 }
@@ -2184,8 +2195,14 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
         ? `found d=${result.farPair.distance.toFixed(5)}`
         : `best d=${result.farPair.distance.toFixed(5)} <= 1`;
   const farPairClass = result.farPair?.exceedsUnit ? 'ab-union-bad' : '';
-  const toolLabels = { move: 'Move', add: 'Add', delete: 'Delete' } as const;
-  const toolControls = (['move', 'add', 'delete'] as const).map((tool) => `
+  const toolLabels: Record<AbUnionTool, string> = {
+    move: 'Move',
+    add: 'Add',
+    delete: 'Delete',
+    'd-mark': 'd-mark',
+    's-mark': 's-mark',
+  };
+  const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark'] as AbUnionTool[]).map((tool) => `
     <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
   const regionRowsHtml = result.regionRows.map((row) => `
@@ -2212,6 +2229,13 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const regionVisibilityControls = Array.from({ length: 6 }, (_, index) => `
     <label><input type="checkbox" data-ab-region-visible="${index}"${abUnionState.regionVisible[index] ? ' checked' : ''}/>R${index}</label>
   `).join('');
+  const labelRows = abUnionState.labels.map((label) => {
+    const targets = abUnionCoincidenceTargets(abUnionState, label.id).map((target) => `
+      <button type="button" class="free-button" data-ab-snap-label="${escapeHtml(label.id)}" data-ab-snap-edge="${target.edge}" data-ab-snap-role="${target.role}"${label.point ? '' : ' disabled'}>snap ${escapeHtml(target.label)}</button>
+      <label><input type="checkbox" data-ab-coincidence-label="${escapeHtml(label.id)}" data-ab-coincidence-edge="${target.edge}" data-ab-coincidence-role="${target.role}"${target.locked ? ' checked' : ''}${label.point ? '' : ' disabled'}/>lock ${escapeHtml(target.label)}</label>
+    `).join('');
+    return `<div class="free-label-row">${escapeHtml(label.name)}: ${label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} ${targets}<button type="button" class="free-button" data-ab-delete-label="${escapeHtml(label.id)}">delete</button></div>`;
+  }).join('');
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
@@ -2223,6 +2247,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
+      <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
       <label>center
         <select data-ab-center-mode>
           <option value="none"${abUnionState.centerMode === 'none' ? ' selected' : ''}>none</option>
@@ -2267,6 +2292,9 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
+    <div class="free-row"><span>${escapeHtml(abUnionState.status)}</span></div>
+    <div class="free-row"><strong>labels</strong></div>
+    ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting sources.</div>'}
     <div class="ab-union-section-title">edge dots</div>
     <table class="ab-union-table">
       <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
@@ -2926,8 +2954,24 @@ abUnionControls.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const tool = target.dataset.abTool;
-  if (tool === 'move' || tool === 'add' || tool === 'delete') {
-    abUnionState.tool = tool;
+  if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark') {
+    setAbUnionTool(abUnionState, tool);
+    render();
+    return;
+  }
+  const snapLabel = target.dataset.abSnapLabel;
+  const snapRole = target.dataset.abSnapRole;
+  if (snapLabel && isAbUnionCoincidenceRole(snapRole)) {
+    const edge = Number(target.dataset.abSnapEdge);
+    if (Number.isInteger(edge) && edge >= 0 && edge < 6) {
+      snapAbUnionLabelToEdge(abUnionState, snapLabel, edge, snapRole);
+      render();
+    }
+    return;
+  }
+  const deleteLabel = target.dataset.abDeleteLabel;
+  if (deleteLabel) {
+    deleteAbUnionLabel(abUnionState, deleteLabel);
     render();
     return;
   }
@@ -2976,6 +3020,20 @@ abUnionControls.addEventListener('change', (event) => {
     abUnionState.clipToCornerSectors = target.checked;
     abUnionState.lastOptimized = null;
     render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abCenterLocked !== undefined) {
+    abUnionState.centerLocked = target.checked;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abCoincidenceLabel !== undefined) {
+    const edge = Number(target.dataset.abCoincidenceEdge);
+    const role = target.dataset.abCoincidenceRole;
+    if (Number.isInteger(edge) && edge >= 0 && edge < 6 && isAbUnionCoincidenceRole(role)) {
+      setAbUnionCoincidenceLock(abUnionState, target.dataset.abCoincidenceLabel, edge, role, target.checked);
+      render();
+    }
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.abRegionVisible !== undefined) {
