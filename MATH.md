@@ -278,17 +278,28 @@ The `ab union` mode studies a related corner-region problem. For each edge
 \[
 e_i=[V_i,V_{i+1}]
 \]
-choose
+choose one or two ordered boundary dots
 \[
-p_i=V_i+b_i(V_{i+1}-V_i), \qquad 0 \le b_i \le 1.
+X_i=V_i+\ell_i(V_{i+1}-V_i),\qquad
+Y_i=V_i+r_i(V_{i+1}-V_i),
+\qquad 0\le \ell_i\le r_i\le 1.
 \]
-At vertex `V_i`, the incoming length is
+A one-dot edge is the special case \(\ell_i=r_i\).  The outgoing value at
+`V_i` is
 \[
-a_i=1-b_{i-1}.
+b_i=\ell_i,
 \]
-Thus the equality case is
+and the incoming value at `V_{i+1}` is
 \[
-a_i+b_i=1 \iff b_i=b_{i-1}.
+a_{i+1}=1-r_i.
+\]
+Thus at vertex `V_i`,
+\[
+a_i=1-r_{i-1}.
+\]
+The equality case is
+\[
+a_i+b_i=1 \iff \ell_i=r_{i-1}.
 \]
 
 The local coordinates at `V_i` use the two boundary directions toward `V_{i+1}` and `V_{i-1}`. In those coordinates a sampled point has coordinates `(u,v)` with `u,v >= 0`, and the metric is
@@ -297,13 +308,13 @@ The local coordinates at `V_i` use the two boundary directions toward `V_{i+1}` 
 \]
 The displayed region `R_i` is computed from the local membership predicate for all unit equilateral triangles containing
 \[
-V_i,\quad p_{i-1},\quad p_i
+V_i,\quad Y_{i-1},\quad X_i
 \]
 inside the local `120^\circ` cone. The table value
 \[
 d_i=\sqrt{a_i^2+a_i b_i+b_i^2}
 \]
-is the distance between the adjacent edge points `p_{i-1}` and `p_i`; if `d_i>1`, the local required set cannot fit inside a unit equilateral triangle.
+is the distance between the adjacent edge dots `Y_{i-1}` and `X_i`; if `d_i>1`, the local required set cannot fit inside a unit equilateral triangle.
 
 The uncovered red region is
 \[
@@ -320,7 +331,8 @@ Optional UI modifiers:
 - Individual region visibility affects only the displayed covered fill.
 - `clip to corner sectors` clips each `R_i` by the adjacent half-diagonal sector; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
 - The red-pair search checks sampled points of `U` for a witness pair with Euclidean distance greater than `1`.
-- Equality-detector `same b` locks are UI constraints on the selected `b_i` values; they are not additional geometry.
+- `Move`, `Add`, and `Delete` tools edit the edge dots.  An edge has at least one dot and at most two dots.
+- `same a` and `same b` locks are UI constraints on selected `a_i` and `b_i` values; they are not additional geometry.
 
 ## 12. What remains to prove mathematically
 

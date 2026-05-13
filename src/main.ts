@@ -96,12 +96,13 @@ import {
   type VSample,
 } from './halfSkeletonFrontier';
 import {
+  abUnionAValues,
+  abUnionBValues,
   createDefaultAbUnionState,
   optimizeAbUnionTheta,
   renderAbUnion,
-  runAbUnionRandomSearch,
+  setAbUnionLock,
   setAbUnionPreset,
-  setAbUnionEqualityLock,
   setupAbUnionInteraction,
   type AbUnionCenterMode,
   type AbUnionPreset,
@@ -2150,10 +2151,6 @@ function formatAbUnionDegrees(radians: number): string {
   return `${(radians * 180 / Math.PI).toFixed(1)} deg`;
 }
 
-function formatAbUnionB(values: number[]): string {
-  return `(${values.map((value) => value.toFixed(4)).join(', ')})`;
-}
-
 function abUnionCenterLabel(mode: AbUnionCenterMode): string {
   if (mode === 'none') return 'none';
   if (mode === 'circle') return 'circle';
@@ -2161,10 +2158,8 @@ function abUnionCenterLabel(mode: AbUnionCenterMode): string {
   return 'triangle';
 }
 
-function abUnionResultClass(value: string): string {
-  if (value === 'interesting') return 'is-good';
-  if (value === 'needs refinement') return 'is-warn';
-  return 'is-muted';
+function formatAbUnionValues(label: string, values: number[]): string {
+  return `${label} = (${values.map((value) => value.toFixed(4)).join(', ')})`;
 }
 
 function renderAbUnionPanel(result: AbUnionRenderResult): void {
@@ -2172,7 +2167,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const lastOptimized = abUnionState.lastOptimized
     ? `best L*=${abUnionState.lastOptimized.L.toFixed(5)} at ${formatAbUnionDegrees(abUnionState.lastOptimized.theta)}`
     : 'best L*: not optimized';
-  const equalityWarning = result.minSeparation < 1e-3
+  const equalityWarning = result.minEqualityGap < 1e-3
     ? '<div class="ab-union-warning">close to equality; apparent L &lt; 1 may be a near-degenerate artifact</div>'
     : '';
   const centerContainsText = abUnionState.centerMode === 'none'
@@ -2189,42 +2184,40 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
         ? `found d=${result.farPair.distance.toFixed(5)}`
         : `best d=${result.farPair.distance.toFixed(5)} <= 1`;
   const farPairClass = result.farPair?.exceedsUnit ? 'ab-union-bad' : '';
-  const equalityRowsHtml = result.equalityRows.map((row) => `
-    <tr class="${row.equality ? 'ab-union-equality-row' : ''}">
-      <td><input type="checkbox" title="include p${row.index} in the same-b group" data-ab-equality-lock="${row.index}"${row.locked ? ' checked' : ''}/></td>
-      <td>${row.index}</td>
-      <td>${row.previousB.toFixed(4)}</td>
-      <td>${row.currentB.toFixed(4)}</td>
-      <td>${row.sum.toFixed(4)}</td>
-      <td>${row.equality ? 'yes' : 'no'}</td>
-    </tr>
+  const toolLabels = { move: 'Move', add: 'Add', delete: 'Delete' } as const;
+  const toolControls = (['move', 'add', 'delete'] as const).map((tool) => `
+    <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
   const regionRowsHtml = result.regionRows.map((row) => `
-    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}">
+    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
       <td>R${row.index}</td>
+      <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
+      <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
       <td>${row.a.toFixed(4)}</td>
       <td>${row.b.toFixed(4)}</td>
+      <td>${row.sum.toFixed(4)}</td>
       <td>${row.distance.toFixed(4)}</td>
+      <td>${row.equality ? 'yes' : 'no'}</td>
       <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
+    </tr>
+  `).join('');
+  const edgeRowsHtml = result.edgeRows.map((row) => `
+    <tr>
+      <td>e${row.index}</td>
+      <td>${row.split ? 'two' : 'one'}</td>
+      <td>${row.left.toFixed(4)}</td>
+      <td>${row.right.toFixed(4)}</td>
     </tr>
   `).join('');
   const regionVisibilityControls = Array.from({ length: 6 }, (_, index) => `
     <label><input type="checkbox" data-ab-region-visible="${index}"${abUnionState.regionVisible[index] ? ' checked' : ''}/>R${index}</label>
   `).join('');
-  const searchRows = abUnionState.searchResults.map((sample, index) => `
-    <tr>
-      <td>${index + 1}</td>
-      <td>${sample.L.toFixed(5)}</td>
-      <td>${formatAbUnionDegrees(sample.theta)}</td>
-      <td>${sample.minSeparation.toExponential(2)}</td>
-      <td><span class="ab-union-pill ${abUnionResultClass(sample.classification)}">${escapeHtml(sample.classification)}</span></td>
-    </tr>
-    <tr>
-      <td colspan="5" class="ab-union-b">${escapeHtml(formatAbUnionB(sample.b))}</td>
-    </tr>
-  `).join('');
 
   abUnionControls.innerHTML = `
+    <div class="ab-union-toolbar">
+      <span>tool</span>
+      ${toolControls}
+    </div>
     <div class="ab-union-toolbar">
       <label><input type="checkbox" data-ab-show-region${abUnionState.showRegion ? ' checked' : ''}/>show region</label>
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
@@ -2252,8 +2245,6 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-preset="equality">equality</button>
-      <button type="button" class="free-button" data-ab-preset="near-miss">near miss</button>
-      <button type="button" class="free-button" data-ab-preset="random-strict">random strict</button>
       <button type="button" class="free-button" data-ab-preset="midpoint">midpoints</button>
     </div>
     <div class="ab-union-row">
@@ -2262,7 +2253,6 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-optimize>optimize theta</button>
-      <button type="button" class="free-button" data-ab-search>random batch</button>
     </div>
     <div class="ab-union-readout">
       <span>L(theta)</span><strong>${result.currentL.toFixed(5)}</strong>
@@ -2274,23 +2264,18 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>center contains U</span><strong class="${centerContainsClass}">${escapeHtml(centerContainsText)}</strong>
       <span>red pair search</span><strong class="${farPairClass}">${escapeHtml(farPairText)}</strong>
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
-      <span>min |b_i-b_{i-1}|</span><strong>${result.minSeparation.toExponential(3)}</strong>
+      <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
-    <div class="ab-union-section-title">equality detector</div>
+    <div class="ab-union-section-title">edge dots</div>
     <table class="ab-union-table">
-      <thead><tr><th>same b</th><th>i</th><th>b prev</th><th>b_i</th><th>a_i+b_i</th><th>eq?</th></tr></thead>
-      <tbody>${equalityRowsHtml}</tbody>
+      <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+      <tbody>${edgeRowsHtml}</tbody>
     </table>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>a_i</th><th>b_i</th><th>d_i</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
-    </table>
-    <div class="ab-union-section-title">random search</div>
-    <table class="ab-union-table">
-      <thead><tr><th>#</th><th>L*</th><th>theta</th><th>sep</th><th>class</th></tr></thead>
-      <tbody>${searchRows || '<tr><td colspan="5">no batch run yet</td></tr>'}</tbody>
     </table>
   `;
 }
@@ -2437,9 +2422,9 @@ function render(): void {
     drawHexagon(ctx);
     const abResult = renderAbUnion(ctx, abUnionState, triangleState, manualLocalCs);
 
-    gammaValues.textContent = `b = ${formatTuple(abUnionState.b)}`;
+    gammaValues.textContent = `${formatAbUnionValues('a', abUnionAValues(abUnionState))}; ${formatAbUnionValues('b', abUnionBValues(abUnionState))}`;
     localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}`;
-    localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min separation = ${abResult.minSeparation.toExponential(3)}`;
+    localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min equality gap = ${abResult.minEqualityGap.toExponential(3)}`;
     ceStatus.textContent = 'ab union: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
     ceChainStatus.textContent = abUnionState.centerMode === 'none'
@@ -2940,6 +2925,12 @@ freeStateLoadButton.addEventListener('click', () => {
 abUnionControls.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  const tool = target.dataset.abTool;
+  if (tool === 'move' || tool === 'add' || tool === 'delete') {
+    abUnionState.tool = tool;
+    render();
+    return;
+  }
   const preset = target.dataset.abPreset as AbUnionPreset | undefined;
   if (preset) {
     setAbUnionPreset(abUnionState, preset);
@@ -2951,10 +2942,6 @@ abUnionControls.addEventListener('click', (event) => {
     abUnionState.theta = abUnionState.lastOptimized.theta;
     render();
     return;
-  }
-  if (target.dataset.abSearch !== undefined) {
-    abUnionState.searchResults = runAbUnionRandomSearch();
-    render();
   }
 });
 
@@ -2999,10 +2986,13 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.abEqualityLock !== undefined) {
-    const index = Number(target.dataset.abEqualityLock);
+  if (target instanceof HTMLInputElement && target.dataset.abLockKind !== undefined) {
+    const index = Number(target.dataset.abLockIndex);
+    const kind = target.dataset.abLockKind;
     if (Number.isInteger(index) && index >= 0 && index < 6) {
-      setAbUnionEqualityLock(abUnionState, index, target.checked);
+      if (kind === 'a' || kind === 'b') {
+        setAbUnionLock(abUnionState, kind, index, target.checked);
+      }
       render();
     }
     return;

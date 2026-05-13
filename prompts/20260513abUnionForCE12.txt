@@ -1,0 +1,18 @@
+In the abUnion mode, we plot 6 dots on the boundary of hexagon. 
+however, make it able to plot at most 2 dots on one edge.
+If we plot 2 dots, for example, on edge V0V1, the orther is V0 X Y V1 plotted,
+then b (or a) value for V0 is V0X, and a (or b) value for V1 is Y.
+I'm not sure if it is a or b
+make this tool button at the control panel for abUnion mode
+move, add, delete
+ask me many questions
+
+just delete the random batch thing
+also delete random strict
+also remove near miss strict
+update necessary md files be sure to delete no nonexisting features
+
+make default setting 
+show red pair > 1
+and center none
+

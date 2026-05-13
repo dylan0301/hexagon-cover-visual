@@ -37,12 +37,13 @@ This repository contains a Vite + TypeScript web app for exploring unit equilate
 
 The `ab union` shape mode ports the standalone `hex_region_app.html` region explorer into the normal app interface.
 
-- Drag `p_i` along edge `e_i=[V_i,V_{i+1}]` to edit `b_i`.
-- Click `V_i` to toggle the boundary of `R_i`; click `p_i` to toggle `R_i` and `R_{i+1}`.
+- Use `Move`, `Add`, and `Delete` to edit boundary dots on each edge `e_i=[V_i,V_{i+1}]`.
+- Each edge has one shared dot or two ordered dots.  On `e_i`, the left dot gives `b_i`; the right dot gives `a_{i+1}` by distance from the right endpoint.
+- Click `V_i` to toggle the boundary of `R_i`.  In `Move`, a left split dot toggles `R_i`, a right split dot toggles `R_{i+1}`, and a shared dot toggles both.
 - `show region` controls the shaded covered-region fill.
 - `visible regions` checkboxes control which individual `R_i` fills contribute to the shaded union.
 - `show purple triangle` toggles the sampled enclosing equilateral triangle for the current `theta`.
 - `show red pair > 1` continuously searches the red uncovered region for a sampled pair farther than distance `1` and draws the witness when found.
 - `clip to corner sectors` clips `R_i` to the sector bounded by the adjacent half-diagonals; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
 - The center dropdown can show no center shape, the draggable C-triangle, the draggable C-circle, or the manual `c_i` convex hull.
-- The equality detector includes `same b` checkboxes. Checked points form a same-`b` group: checking a new point moves that point to the existing group value, and only checked points move together while dragging.
+- The region table includes `same a` and `same b` checkboxes. Checked values move as locked groups while preserving the edge-dot order.
