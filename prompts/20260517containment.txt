@@ -7,3 +7,7 @@ this does not mark intersections, they just mark anywhere i click.
 since the mechanisms are same, try using the existing codes. if not able to use existing codes,
 refactor so that code is usable in both situations.
 ask me questions
+
+in the region data for ab union mode, on each row, add a checkbox that does the following:
+fix a+b. then a+b value is fixed. so if i change value of a, then b dot moves to remain the same a+b
+ask me questions

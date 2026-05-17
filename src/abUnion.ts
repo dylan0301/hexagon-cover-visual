@@ -103,6 +103,7 @@ export interface AbUnionState {
   regionVisible: boolean[];
   aLocked: boolean[];
   bLocked: boolean[];
+  fixedSums: Array<number | null>;
   activeRegions: boolean[];
   labels: AbUnionLabel[];
   selectedMarkSources: AbUnionMarkSourceRef[];
@@ -129,6 +130,7 @@ export interface AbUnionRegionRow {
   equality: boolean;
   aLocked: boolean;
   bLocked: boolean;
+  fixedSum: number | null;
   state: 'active' | 'limit' | 'empty';
 }
 
@@ -1439,6 +1441,16 @@ function normalizeLockArray(value: boolean[] | undefined): boolean[] {
   return Array.from({ length: 6 }, (_, index) => Boolean(value?.[index]));
 }
 
+function normalizeFixedSums(value: unknown): Array<number | null> {
+  return Array.from({ length: 6 }, (_, index) => {
+    if (!Array.isArray(value)) return null;
+    const fixedSum = value[index];
+    return typeof fixedSum === 'number' && Number.isFinite(fixedSum)
+      ? Math.max(0, Math.min(2, fixedSum))
+      : null;
+  });
+}
+
 function normalizeMarkSource(value: unknown): AbUnionMarkSourceRef | null {
   if (!value || typeof value !== 'object') return null;
   const ref = value as Partial<AbUnionMarkSourceRef>;
@@ -1538,6 +1550,7 @@ function normalizeAbUnionState(state: AbUnionState): void {
   state.regionVisible = Array.from({ length: 6 }, (_, index) => state.regionVisible?.[index] ?? true);
   state.aLocked = normalizeLockArray(state.aLocked);
   state.bLocked = normalizeLockArray(state.bLocked);
+  state.fixedSums = normalizeFixedSums(state.fixedSums);
   state.activeRegions = normalizeLockArray(state.activeRegions);
   state.labels = normalizeLabels(state.labels);
   state.selectedMarkSources = Array.isArray(state.selectedMarkSources)
@@ -1555,87 +1568,385 @@ function normalizeAbUnionState(state: AbUnionState): void {
   state.status = typeof state.status === 'string' ? state.status : 'Move mode: drag edge dots or center geometry.';
 }
 
-function groupedIndices(locks: boolean[], index: number): number[] {
-  return locks[mod6(index)] ? locks
-    .map((locked, current) => locked ? current : -1)
-    .filter((current) => current >= 0) : [mod6(index)];
+type AbUnionVariableKind = 'a' | 'b';
+type AbUnionSign = -1 | 1;
+
+interface AbUnionPreference {
+  kind: AbUnionVariableKind;
+  index: number;
+  value: number;
 }
 
-function clampBForGroup(state: AbUnionState, indices: number[], value: number): number {
-  const upper = Math.min(...indices.map((index) => {
-    const edge = state.edgeDots[mod6(index)];
-    return edge.split ? edge.right : 1;
-  }));
-  return Math.max(0, Math.min(upper, value));
+interface AbUnionConstraintRelation {
+  to: number;
+  sign: AbUnionSign;
+  offset: number;
 }
 
-function clampAForGroup(state: AbUnionState, indices: number[], value: number): number {
-  const upper = Math.min(...indices.map((index) => {
-    const edge = state.edgeDots[mod6(index - 1)];
-    return edge.split ? 1 - edge.left : 1;
-  }));
-  return Math.max(0, Math.min(upper, value));
+interface AbUnionVariablePosition {
+  component: number;
+  sign: AbUnionSign;
+  offset: number;
 }
 
-function applyBValue(state: AbUnionState, indices: number[], value: number): void {
-  for (const index of indices) {
-    const edge = state.edgeDots[mod6(index)];
-    const nextValue = clamp01(value);
+interface AbUnionConstraintComponent {
+  variables: number[];
+  fixedRoot: number | null;
+  minRoot: number;
+  maxRoot: number;
+  hasPreference: boolean;
+}
+
+interface AbUnionConstraintAnalysis {
+  positions: AbUnionVariablePosition[];
+  components: AbUnionConstraintComponent[];
+}
+
+const AB_UNION_VARIABLE_COUNT = 12;
+
+function abVariableIndex(kind: AbUnionVariableKind, index: number): number {
+  return kind === 'a' ? mod6(index) : 6 + mod6(index);
+}
+
+function multiplySign(first: AbUnionSign, second: AbUnionSign): AbUnionSign {
+  return first === second ? 1 : -1;
+}
+
+function addConstraintRelation(
+  graph: AbUnionConstraintRelation[][],
+  from: number,
+  to: number,
+  sign: AbUnionSign,
+  offset: number,
+): void {
+  graph[from].push({ to, sign, offset });
+  graph[to].push({ to: from, sign, offset: sign === 1 ? -offset : offset });
+}
+
+function setFixedRoot(component: AbUnionConstraintComponent, value: number): boolean {
+  if (component.fixedRoot === null) {
+    component.fixedRoot = value;
+    return true;
+  }
+  return Math.abs(component.fixedRoot - value) <= EPS;
+}
+
+function buildAbUnionConstraintGraph(state: AbUnionState): AbUnionConstraintRelation[][] {
+  const graph = Array.from({ length: AB_UNION_VARIABLE_COUNT }, () => [] as AbUnionConstraintRelation[]);
+  const firstA = state.aLocked.findIndex(Boolean);
+  if (firstA >= 0) {
+    for (let index = 0; index < 6; index++) {
+      if (state.aLocked[index] && index !== firstA) {
+        addConstraintRelation(graph, abVariableIndex('a', firstA), abVariableIndex('a', index), 1, 0);
+      }
+    }
+  }
+  const firstB = state.bLocked.findIndex(Boolean);
+  if (firstB >= 0) {
+    for (let index = 0; index < 6; index++) {
+      if (state.bLocked[index] && index !== firstB) {
+        addConstraintRelation(graph, abVariableIndex('b', firstB), abVariableIndex('b', index), 1, 0);
+      }
+    }
+  }
+  for (let edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
+    if (!state.edgeDots[edgeIndex].split) {
+      addConstraintRelation(graph, abVariableIndex('b', edgeIndex), abVariableIndex('a', edgeIndex + 1), -1, 1);
+    }
+  }
+  for (let index = 0; index < 6; index++) {
+    const fixedSum = state.fixedSums[index];
+    if (fixedSum !== null) {
+      addConstraintRelation(graph, abVariableIndex('a', index), abVariableIndex('b', index), -1, fixedSum);
+    }
+  }
+  return graph;
+}
+
+function analyzeAbUnionConstraints(graph: AbUnionConstraintRelation[][]): AbUnionConstraintAnalysis | null {
+  const positions: Array<AbUnionVariablePosition | null> = Array(AB_UNION_VARIABLE_COUNT).fill(null);
+  const components: AbUnionConstraintComponent[] = [];
+
+  for (let root = 0; root < AB_UNION_VARIABLE_COUNT; root++) {
+    if (positions[root]) continue;
+    const componentIndex = components.length;
+    const component: AbUnionConstraintComponent = {
+      variables: [],
+      fixedRoot: null,
+      minRoot: Number.NEGATIVE_INFINITY,
+      maxRoot: Number.POSITIVE_INFINITY,
+      hasPreference: false,
+    };
+    components.push(component);
+    positions[root] = { component: componentIndex, sign: 1, offset: 0 };
+    const stack = [root];
+
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      const currentPosition = positions[current]!;
+      component.variables.push(current);
+      for (const relation of graph[current]) {
+        const nextPosition: AbUnionVariablePosition = {
+          component: componentIndex,
+          sign: multiplySign(relation.sign, currentPosition.sign),
+          offset: relation.sign * currentPosition.offset + relation.offset,
+        };
+        const existing = positions[relation.to];
+        if (!existing) {
+          positions[relation.to] = nextPosition;
+          stack.push(relation.to);
+          continue;
+        }
+        if (existing.sign === nextPosition.sign) {
+          if (Math.abs(existing.offset - nextPosition.offset) > EPS) return null;
+          continue;
+        }
+        const fixedRoot = (nextPosition.offset - existing.offset) / (existing.sign - nextPosition.sign);
+        if (!setFixedRoot(component, fixedRoot)) return null;
+      }
+    }
+  }
+
+  return {
+    positions: positions.map((position) => {
+      if (!position) throw new Error('Missing AB union constraint position.');
+      return position;
+    }),
+    components,
+  };
+}
+
+function constrainRootInterval(
+  component: AbUnionConstraintComponent,
+  coefficient: number,
+  constant: number,
+  lower: number,
+  upper: number,
+): boolean {
+  if (Math.abs(coefficient) <= EPS) {
+    return constant >= lower - EPS && constant <= upper + EPS;
+  }
+  const first = (lower - constant) / coefficient;
+  const second = (upper - constant) / coefficient;
+  component.minRoot = Math.max(component.minRoot, Math.min(first, second));
+  component.maxRoot = Math.min(component.maxRoot, Math.max(first, second));
+  return component.minRoot <= component.maxRoot + EPS;
+}
+
+function rootForVariableValue(position: AbUnionVariablePosition, value: number): number {
+  return position.sign * (value - position.offset);
+}
+
+function variableValue(position: AbUnionVariablePosition, rootValues: number[]): number {
+  return position.sign * rootValues[position.component] + position.offset;
+}
+
+function rootForCurrentComponent(
+  component: AbUnionConstraintComponent,
+  positions: AbUnionVariablePosition[],
+  currentValues: number[],
+): number {
+  const variable = component.variables[0];
+  return rootForVariableValue(positions[variable], currentValues[variable]);
+}
+
+function clampRootToInterval(value: number, component: AbUnionConstraintComponent): number {
+  return Math.max(component.minRoot, Math.min(component.maxRoot, value));
+}
+
+function constrainSplitEdgeAgainstValue(
+  component: AbUnionConstraintComponent,
+  position: AbUnionVariablePosition,
+  otherValue: number,
+): boolean {
+  return constrainRootInterval(component, position.sign, position.offset + otherValue, Number.NEGATIVE_INFINITY, 1);
+}
+
+function cleanUnitValue(value: number): number {
+  if (value >= -EPS && value <= EPS) return 0;
+  if (value >= 1 - EPS && value <= 1 + EPS) return 1;
+  return clamp01(value);
+}
+
+function readAbUnionVariableValues(state: AbUnionState): number[] {
+  return Array.from({ length: AB_UNION_VARIABLE_COUNT }, (_, index) =>
+    index < 6 ? aValue(state, index) : bValue(state, index - 6),
+  );
+}
+
+function writeAbUnionVariableValues(state: AbUnionState, values: number[]): void {
+  for (let edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
+    const edge = state.edgeDots[edgeIndex];
+    const left = cleanUnitValue(values[abVariableIndex('b', edgeIndex)]);
+    const right = cleanUnitValue(1 - values[abVariableIndex('a', edgeIndex + 1)]);
     if (edge.split) {
-      edge.left = Math.min(nextValue, edge.right);
+      edge.left = left;
+      edge.right = right;
+      if (edge.right < edge.left && edge.left - edge.right <= EPS) {
+        edge.right = edge.left;
+      }
     } else {
-      edge.left = nextValue;
-      edge.right = nextValue;
+      const shared = cleanUnitValue((left + right) / 2);
+      edge.left = shared;
+      edge.right = shared;
     }
   }
 }
 
-function applyAValue(state: AbUnionState, indices: number[], value: number): void {
-  for (const index of indices) {
-    const edge = state.edgeDots[mod6(index - 1)];
-    const nextRight = 1 - clamp01(value);
-    if (edge.split) {
-      edge.right = Math.max(edge.left, nextRight);
-    } else {
-      edge.left = nextRight;
-      edge.right = nextRight;
+function abUnionValuesSatisfyConstraints(state: AbUnionState, values: number[]): boolean {
+  for (const value of values) {
+    if (value < -EPS || value > 1 + EPS) return false;
+  }
+  for (let index = 0; index < 6; index++) {
+    if (state.fixedSums[index] !== null) {
+      const sum = values[abVariableIndex('a', index)] + values[abVariableIndex('b', index)];
+      if (Math.abs(sum - state.fixedSums[index]!) > 10 * EPS) return false;
     }
   }
+  const firstA = state.aLocked.findIndex(Boolean);
+  if (firstA >= 0) {
+    const value = values[abVariableIndex('a', firstA)];
+    for (let index = 0; index < 6; index++) {
+      if (state.aLocked[index] && Math.abs(values[abVariableIndex('a', index)] - value) > 10 * EPS) {
+        return false;
+      }
+    }
+  }
+  const firstB = state.bLocked.findIndex(Boolean);
+  if (firstB >= 0) {
+    const value = values[abVariableIndex('b', firstB)];
+    for (let index = 0; index < 6; index++) {
+      if (state.bLocked[index] && Math.abs(values[abVariableIndex('b', index)] - value) > 10 * EPS) {
+        return false;
+      }
+    }
+  }
+  for (let edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
+    const edgeSum = values[abVariableIndex('b', edgeIndex)] + values[abVariableIndex('a', edgeIndex + 1)];
+    if (state.edgeDots[edgeIndex].split) {
+      if (edgeSum > 1 + 10 * EPS) return false;
+    } else if (Math.abs(edgeSum - 1) > 10 * EPS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function solveAbUnionConstraints(state: AbUnionState, preferences: AbUnionPreference[]): boolean {
+  normalizeAbUnionState(state);
+  const currentValues = readAbUnionVariableValues(state);
+  const analysis = analyzeAbUnionConstraints(buildAbUnionConstraintGraph(state));
+  if (!analysis) return false;
+  const { positions, components } = analysis;
+  const preferredRootByComponent = new Map<number, number>();
+
+  for (const preference of preferences) {
+    const variable = abVariableIndex(preference.kind, preference.index);
+    const position = positions[variable];
+    if (!preferredRootByComponent.has(position.component)) {
+      preferredRootByComponent.set(position.component, rootForVariableValue(position, clamp01(preference.value)));
+      components[position.component].hasPreference = true;
+    }
+  }
+
+  for (let variable = 0; variable < AB_UNION_VARIABLE_COUNT; variable++) {
+    const position = positions[variable];
+    if (!constrainRootInterval(components[position.component], position.sign, position.offset, 0, 1)) {
+      return false;
+    }
+  }
+
+  for (let edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
+    if (!state.edgeDots[edgeIndex].split) continue;
+    const bPosition = positions[abVariableIndex('b', edgeIndex)];
+    const aPosition = positions[abVariableIndex('a', edgeIndex + 1)];
+    if (bPosition.component === aPosition.component) {
+      const component = components[bPosition.component];
+      if (!constrainRootInterval(
+        component,
+        bPosition.sign + aPosition.sign,
+        bPosition.offset + aPosition.offset,
+        Number.NEGATIVE_INFINITY,
+        1,
+      )) {
+        return false;
+      }
+    }
+  }
+
+  const rootValues = components.map((component, index) => {
+    if (component.fixedRoot !== null) return component.fixedRoot;
+    if (component.hasPreference) return 0;
+    return clampRootToInterval(rootForCurrentComponent(component, positions, currentValues), components[index]);
+  });
+
+  for (let edgeIndex = 0; edgeIndex < 6; edgeIndex++) {
+    if (!state.edgeDots[edgeIndex].split) continue;
+    const bPosition = positions[abVariableIndex('b', edgeIndex)];
+    const aPosition = positions[abVariableIndex('a', edgeIndex + 1)];
+    if (bPosition.component === aPosition.component) continue;
+    const bComponent = components[bPosition.component];
+    const aComponent = components[aPosition.component];
+    if (bComponent.hasPreference && !aComponent.hasPreference) {
+      if (!constrainSplitEdgeAgainstValue(bComponent, bPosition, variableValue(aPosition, rootValues))) {
+        return false;
+      }
+    } else if (aComponent.hasPreference && !bComponent.hasPreference) {
+      if (!constrainSplitEdgeAgainstValue(aComponent, aPosition, variableValue(bPosition, rootValues))) {
+        return false;
+      }
+    } else if (!bComponent.hasPreference && !aComponent.hasPreference && bComponent.fixedRoot === null) {
+      if (!constrainSplitEdgeAgainstValue(bComponent, bPosition, variableValue(aPosition, rootValues))) {
+        return false;
+      }
+    } else if (!bComponent.hasPreference && !aComponent.hasPreference && aComponent.fixedRoot === null) {
+      if (!constrainSplitEdgeAgainstValue(aComponent, aPosition, variableValue(bPosition, rootValues))) {
+        return false;
+      }
+    }
+  }
+
+  for (let index = 0; index < components.length; index++) {
+    const component = components[index];
+    if (component.fixedRoot !== null) {
+      if (component.fixedRoot < component.minRoot - EPS || component.fixedRoot > component.maxRoot + EPS) return false;
+      rootValues[index] = component.fixedRoot;
+    } else {
+      const target = component.hasPreference
+        ? preferredRootByComponent.get(index) ?? 0
+        : rootForCurrentComponent(component, positions, currentValues);
+      rootValues[index] = clampRootToInterval(target, component);
+    }
+  }
+
+  const nextValues = positions.map((position) => cleanUnitValue(variableValue(position, rootValues)));
+  if (!abUnionValuesSatisfyConstraints(state, nextValues)) return false;
+  writeAbUnionVariableValues(state, nextValues);
+  return true;
 }
 
 function setBValue(state: AbUnionState, index: number, value: number): void {
-  normalizeAbUnionState(state);
-  const indices = groupedIndices(state.bLocked, index);
-  applyBValue(state, indices, clampBForGroup(state, indices, clamp01(value)));
-  state.lastOptimized = null;
+  if (solveAbUnionConstraints(state, [{ kind: 'b', index, value }])) {
+    state.lastOptimized = null;
+  } else {
+    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  }
 }
 
 function setAValue(state: AbUnionState, index: number, value: number): void {
-  normalizeAbUnionState(state);
-  const indices = groupedIndices(state.aLocked, index);
-  applyAValue(state, indices, clampAForGroup(state, indices, clamp01(value)));
-  state.lastOptimized = null;
+  if (solveAbUnionConstraints(state, [{ kind: 'a', index, value }])) {
+    state.lastOptimized = null;
+  } else {
+    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  }
 }
 
 function setSharedEdgeValue(state: AbUnionState, edgeIndex: number, value: number): void {
-  normalizeAbUnionState(state);
-  const edge = mod6(edgeIndex);
-  const bGroup = groupedIndices(state.bLocked, edge);
-  const aGroup = groupedIndices(state.aLocked, edge + 1);
-  const minValue = Math.max(0, ...aGroup.map((index) => {
-    const previousEdge = state.edgeDots[mod6(index - 1)];
-    return previousEdge.split ? previousEdge.left : 0;
-  }));
-  const maxValue = Math.min(1, ...bGroup.map((index) => {
-    const currentEdge = state.edgeDots[mod6(index)];
-    return currentEdge.split ? currentEdge.right : 1;
-  }));
-  const nextValue = minValue <= maxValue
-    ? Math.max(minValue, Math.min(maxValue, value))
-    : clamp01(value);
-  applyBValue(state, bGroup, nextValue);
-  applyAValue(state, aGroup, 1 - nextValue);
-  state.lastOptimized = null;
+  if (solveAbUnionConstraints(state, [{ kind: 'b', index: edgeIndex, value }])) {
+    state.lastOptimized = null;
+  } else {
+    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  }
 }
 
 function setDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): void {
@@ -1664,10 +1975,18 @@ function deleteEdgeDot(state: AbUnionState, dot: AbUnionDotHandle): void {
   normalizeAbUnionState(state);
   const edge = state.edgeDots[mod6(dot.edge)];
   if (!edge.split || dot.role === 'shared') return;
+  const previous = { ...edge };
   const kept = dot.role === 'left' ? edge.right : edge.left;
   edge.left = kept;
   edge.right = kept;
   edge.split = false;
+  if (!solveAbUnionConstraints(state, [])) {
+    edge.left = previous.left;
+    edge.right = previous.right;
+    edge.split = previous.split;
+    state.status = 'Cannot delete dot: same-value and fixed-sum constraints conflict.';
+    return;
+  }
   state.lastOptimized = null;
 }
 
@@ -1687,27 +2006,47 @@ export function setAbUnionLock(
   if (locks[index]) return;
 
   const firstLockedIndex = locks.findIndex(Boolean);
+  const preferredValue = firstLockedIndex >= 0
+    ? kind === 'a'
+      ? aValue(state, firstLockedIndex)
+      : bValue(state, firstLockedIndex)
+    : null;
+  const previousLocks = locks.slice();
   locks[index] = true;
-  if (firstLockedIndex >= 0) {
+  const preferences = preferredValue === null
+    ? []
+    : [{ kind, index: firstLockedIndex, value: preferredValue }];
+  if (!solveAbUnionConstraints(state, preferences)) {
     if (kind === 'a') {
-      setAValue(state, index, aValue(state, firstLockedIndex));
+      state.aLocked = previousLocks;
     } else {
-      setBValue(state, index, bValue(state, firstLockedIndex));
+      state.bLocked = previousLocks;
     }
+    state.status = `Cannot lock ${kind}${index}: same-value and fixed-sum constraints conflict.`;
+    return;
   }
   state.lastOptimized = null;
 }
 
 function enforceAbUnionLocks(state: AbUnionState): void {
-  const firstB = state.bLocked.findIndex(Boolean);
-  if (firstB >= 0) {
-    const indices = groupedIndices(state.bLocked, firstB);
-    applyBValue(state, indices, clampBForGroup(state, indices, bValue(state, firstB)));
+  if (!solveAbUnionConstraints(state, [])) {
+    state.status = 'Same-value and fixed-sum constraints conflict.';
   }
-  const firstA = state.aLocked.findIndex(Boolean);
-  if (firstA >= 0) {
-    const indices = groupedIndices(state.aLocked, firstA);
-    applyAValue(state, indices, clampAForGroup(state, indices, aValue(state, firstA)));
+}
+
+export function setAbUnionFixedSum(state: AbUnionState, indexInput: number, fixed: boolean): void {
+  normalizeAbUnionState(state);
+  const index = mod6(indexInput);
+  if (!fixed) {
+    state.fixedSums[index] = null;
+    return;
+  }
+
+  const previousFixedSums = state.fixedSums.slice();
+  state.fixedSums[index] = aValue(state, index) + bValue(state, index);
+  if (!solveAbUnionConstraints(state, [])) {
+    state.fixedSums = previousFixedSums;
+    state.status = `Cannot fix a${index}+b${index}: same-value and fixed-sum constraints conflict.`;
   }
 }
 
@@ -1737,6 +2076,7 @@ function regionRowsForState(state: AbUnionState): AbUnionRegionRow[] {
       equality: Math.abs(a + b - 1) <= 1e-9,
       aLocked: Boolean(state.aLocked[index]),
       bLocked: Boolean(state.bLocked[index]),
+      fixedSum: state.fixedSums[index],
       state: rowState,
     };
   });
@@ -1770,6 +2110,7 @@ export function createDefaultAbUnionState(): AbUnionState {
     regionVisible: Array(6).fill(true),
     aLocked: Array(6).fill(false),
     bLocked: Array(6).fill(false),
+    fixedSums: Array(6).fill(null),
     activeRegions: Array(6).fill(false),
     labels: [],
     selectedMarkSources: [],
@@ -1782,6 +2123,10 @@ export function createDefaultAbUnionState(): AbUnionState {
 }
 
 export function setAbUnionPreset(state: AbUnionState, preset: AbUnionPreset): void {
+  normalizeAbUnionState(state);
+  const previousEdgeDots = state.edgeDots.map((edge) => ({ ...edge }));
+  const previousActiveRegions = state.activeRegions.slice();
+  const previousSelectedMarkSources = state.selectedMarkSources.slice();
   if (preset === 'equality') {
     state.edgeDots = Array.from({ length: 6 }, () => defaultEdgeDots(0.25));
   } else {
@@ -1789,9 +2134,15 @@ export function setAbUnionPreset(state: AbUnionState, preset: AbUnionPreset): vo
   }
   state.activeRegions = Array(6).fill(false);
   state.selectedMarkSources = [];
-  state.lastOptimized = null;
   normalizeAbUnionState(state);
-  enforceAbUnionLocks(state);
+  if (!solveAbUnionConstraints(state, [])) {
+    state.edgeDots = previousEdgeDots;
+    state.activeRegions = previousActiveRegions;
+    state.selectedMarkSources = previousSelectedMarkSources;
+    state.status = 'Cannot apply preset: same-value and fixed-sum constraints conflict.';
+    return;
+  }
+  state.lastOptimized = null;
 }
 
 function evaluateState(

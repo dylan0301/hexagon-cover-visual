@@ -106,6 +106,7 @@ import {
   optimizeAbUnionTheta,
   renderAbUnion,
   setAbUnionCoincidenceLock,
+  setAbUnionFixedSum,
   setAbUnionLock,
   setAbUnionPreset,
   setAbUnionTool,
@@ -2220,6 +2221,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <td>R${row.index}</td>
       <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
       <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
+      <td><input type="checkbox" title="fix current a${row.index}+b${row.index}${row.fixedSum === null ? '' : ` = ${row.fixedSum.toFixed(4)}`}" data-ab-fixed-sum="${row.index}"${row.fixedSum !== null ? ' checked' : ''}/></td>
       <td>${row.a.toFixed(4)}</td>
       <td>${row.b.toFixed(4)}</td>
       <td>${row.sum.toFixed(4)}</td>
@@ -2319,7 +2321,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </table>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix a+b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
   `;
@@ -3067,6 +3069,14 @@ abUnionControls.addEventListener('change', (event) => {
     const index = Number(target.dataset.abRegionVisible);
     if (Number.isInteger(index) && index >= 0 && index < 6) {
       abUnionState.regionVisible[index] = target.checked;
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abFixedSum !== undefined) {
+    const index = Number(target.dataset.abFixedSum);
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      setAbUnionFixedSum(abUnionState, index, target.checked);
       render();
     }
     return;
