@@ -333,6 +333,7 @@ Optional UI modifiers:
 - The red-pair search checks sampled points of `U` for a witness pair with Euclidean distance greater than `1`.
 - `Move`, `Add`, and `Delete` tools edit the edge dots.  An edge has at least one dot and at most two dots.
 - `d-mark` and `s-mark` labels are UI annotations for intersections between the C-triangle or C-circle boundary and a fixed hexagon edge or half-diagonal. `D` labels recompute; `S` labels are frozen at creation time.
+- `f mark` dots are free annotations inside the hexagon; two show their distance, and three or more show the smallest enclosing equilateral triangle.
 - Perimeter-edge labels can move an eligible edge dot once with `snap`, or keep it coincident with the label using a persistent lock.
 - `lock center` freezes the current center geometry controls for the C-triangle, C-circle, or manual `c_i` hull.
 - `same a` and `same b` locks are UI constraints on selected `a_i` and `b_i` values; they are not additional geometry.

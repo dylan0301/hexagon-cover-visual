@@ -14,6 +14,7 @@ import {
 } from './geometry';
 import { HEXAGON_VERTICES } from './hexagon';
 import { CIRCUMRADIUS, getValidRegion, getVertices } from './triangle';
+import { fitTriangle } from './cover';
 
 const SQRT3 = Math.sqrt(3);
 const ANGLE_PERIOD = 2 * Math.PI / 3;
@@ -40,7 +41,7 @@ const FAR_PAIR_DIRECTIONS = Array.from({ length: 48 }, (_, index) => {
 export type AbUnionCenterMode = 'none' | 'triangle' | 'circle' | 'local-c';
 export type AbUnionQuality = 'coarse' | 'high' | 'adaptive';
 export type AbUnionPreset = 'equality' | 'midpoint';
-export type AbUnionTool = 'move' | 'add' | 'delete' | 'd-mark' | 's-mark';
+export type AbUnionTool = 'move' | 'add' | 'delete' | 'd-mark' | 's-mark' | 'f-mark';
 export type AbUnionLockKind = 'a' | 'b';
 export type AbUnionLabelMode = 'dynamic' | 'static';
 export type AbUnionCoincidenceRole = 'shared' | 'left' | 'right';
@@ -83,6 +84,11 @@ export interface AbUnionCoincidenceTarget {
   locked: boolean;
 }
 
+export interface AbUnionFMark {
+  id: string;
+  point: Point;
+}
+
 export interface AbUnionState {
   edgeDots: AbUnionEdgeDots[];
   tool: AbUnionTool;
@@ -101,6 +107,8 @@ export interface AbUnionState {
   labels: AbUnionLabel[];
   selectedMarkSources: AbUnionMarkSourceRef[];
   coincidenceLocks: AbUnionCoincidenceLock[];
+  fMarks: AbUnionFMark[];
+  selectedFMarkId: string | null;
   status: string;
   lastOptimized: AbUnionOptimization | null;
 }
@@ -138,6 +146,9 @@ export interface AbUnionRenderResult {
   centerFailures: number;
   farPair: AbUnionFarPair | null;
   minEqualityGap: number;
+  fMarkCount: number;
+  fMarkDistance: number | null;
+  fMarkTriangleSide: number | null;
   edgeRows: AbUnionEdgeRow[];
   regionRows: AbUnionRegionRow[];
   activeLabel: string;
@@ -170,6 +181,7 @@ type PointerInteraction =
   | { kind: 'idle' }
   | { kind: 'pending-click'; startMouse: Point; hit: AbUnionHitTarget | null }
   | { kind: 'dragging-dot'; dot: AbUnionDotHandle; startMouse: Point; moved: boolean }
+  | { kind: 'dragging-f-mark'; id: string; startMouse: Point; moved: boolean }
   | { kind: 'dragging-local-c'; index: number }
   | { kind: 'dragging-center'; startMouse: Point; startPos: Point; startControl: Point }
   | { kind: 'rotating-triangle'; startMouse: Point; startAngle: number; startPos: Point }
@@ -263,6 +275,31 @@ function pointInHex(point: Point): boolean {
     }
   }
   return inside;
+}
+
+function pointInClosedHex(point: Point): boolean {
+  for (let i = 0; i < 6; i++) {
+    const a = HEXAGON_VERTICES[i];
+    const b = HEXAGON_VERTICES[mod6(i + 1)];
+    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+    if (cross < -EPS) return false;
+  }
+  return true;
+}
+
+function clampPointToHexagon(point: Point): Point {
+  if (pointInClosedHex(point)) return point;
+  let best = closestPointOnSegment(point, HEXAGON_VERTICES[0], HEXAGON_VERTICES[1]);
+  let bestDistance = distance(point, best);
+  for (let i = 1; i < 6; i++) {
+    const candidate = closestPointOnSegment(point, HEXAGON_VERTICES[i], HEXAGON_VERTICES[mod6(i + 1)]);
+    const candidateDistance = distance(point, candidate);
+    if (candidateDistance < bestDistance) {
+      best = candidate;
+      bestDistance = candidateDistance;
+    }
+  }
+  return best;
 }
 
 function createMaskCache(sizeInput: number): MaskCache {
@@ -798,6 +835,54 @@ export function deleteAbUnionLabel(state: AbUnionState, id: string): void {
   state.status = `Deleted ${id}.`;
 }
 
+function nextFMarkId(state: AbUnionState): string {
+  const used = new Set(state.fMarks.map((mark) => mark.id));
+  let index = state.fMarks.length + 1;
+  while (used.has(`F${index}`)) index++;
+  return `F${index}`;
+}
+
+function addAbUnionFMark(state: AbUnionState, point: Point): string | null {
+  normalizeAbUnionState(state);
+  if (!pointInClosedHex(point)) {
+    state.status = 'F-mark mode: click inside the hexagon.';
+    return null;
+  }
+  const id = nextFMarkId(state);
+  state.fMarks.push({ id, point });
+  state.selectedFMarkId = id;
+  state.status = `Created ${id}.`;
+  return id;
+}
+
+function moveAbUnionFMark(state: AbUnionState, id: string, point: Point): void {
+  normalizeAbUnionState(state);
+  const mark = state.fMarks.find((candidate) => candidate.id === id);
+  if (!mark) return;
+  mark.point = clampPointToHexagon(point);
+  state.selectedFMarkId = id;
+}
+
+export function deleteSelectedAbUnionFMark(state: AbUnionState): void {
+  normalizeAbUnionState(state);
+  const selected = state.selectedFMarkId;
+  if (!selected) {
+    state.status = 'No f mark selected.';
+    return;
+  }
+  state.fMarks = state.fMarks.filter((mark) => mark.id !== selected);
+  state.selectedFMarkId = null;
+  state.status = `Deleted ${selected}.`;
+}
+
+export function clearAbUnionFMarks(state: AbUnionState): void {
+  normalizeAbUnionState(state);
+  if (state.fMarks.length === 0) return;
+  state.fMarks = [];
+  state.selectedFMarkId = null;
+  state.status = 'Cleared f marks.';
+}
+
 function sameCoincidenceTarget(
   lock: AbUnionCoincidenceLock,
   edge: number,
@@ -908,6 +993,8 @@ export function setAbUnionTool(state: AbUnionState, tool: AbUnionTool): void {
     state.status = 'Add mode: click an edge or one-dot handle.';
   } else if (tool === 'delete') {
     state.status = 'Delete mode: click a split-dot handle.';
+  } else if (tool === 'f-mark') {
+    state.status = 'F-mark mode: click inside the hexagon to add dots; drag dots to move them.';
   } else {
     state.status = 'Move mode: drag edge dots or center geometry.';
   }
@@ -1064,6 +1151,61 @@ function drawFarPair(ctx: CanvasRenderingContext2D, pair: AbUnionFarPair | null)
   ctx.textBaseline = 'bottom';
   ctx.fillStyle = '#991b1b';
   ctx.fillText(`d=${pair.distance.toFixed(3)}`, mid.x, mid.y - 6);
+  ctx.restore();
+}
+
+function fMarkDistance(state: AbUnionState): number | null {
+  return state.fMarks.length === 2 ? distance(state.fMarks[0].point, state.fMarks[1].point) : null;
+}
+
+function fMarkTriangle(state: AbUnionState): ReturnType<typeof fitTriangle> | null {
+  if (state.fMarks.length < 3) return null;
+  return fitTriangle('F', state.fMarks.map((mark) => mark.point), '#eab308');
+}
+
+function drawFMarkDistance(ctx: CanvasRenderingContext2D, state: AbUnionState, distanceValue: number | null): void {
+  if (state.fMarks.length !== 2 || distanceValue === null) return;
+  const start = mathToCanvas(state.fMarks[0].point);
+  const end = mathToCanvas(state.fMarks[1].point);
+  const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+
+  ctx.save();
+  ctx.strokeStyle = '#2563eb';
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#2563eb';
+  ctx.fillText(`d=${distanceValue.toFixed(5)}`, mid.x, mid.y - 6);
+  ctx.restore();
+}
+
+function drawFMarkOverlay(ctx: CanvasRenderingContext2D, state: AbUnionState, triangle: ReturnType<typeof fitTriangle> | null): void {
+  if (triangle) {
+    drawPolygon(ctx, triangle.vertices, '#eab308', 'rgba(250, 204, 21, 0.14)');
+  }
+
+  ctx.save();
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const mark of state.fMarks) {
+    const point = mathToCanvas(mark.point);
+    const selected = mark.id === state.selectedFMarkId;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, selected ? 6.6 : 5.4, 0, 2 * Math.PI);
+    ctx.fillStyle = '#fef08a';
+    ctx.fill();
+    ctx.strokeStyle = selected ? '#2563eb' : '#a16207';
+    ctx.lineWidth = selected ? 2.4 : 1.7;
+    ctx.stroke();
+    ctx.fillStyle = '#854d0e';
+    ctx.fillText(mark.id, point.x + 7, point.y - 7);
+  }
   ctx.restore();
 }
 
@@ -1333,6 +1475,27 @@ function normalizeLabels(value: unknown): AbUnionLabel[] {
   });
 }
 
+function normalizeFMarks(value: unknown): AbUnionFMark[] {
+  if (!Array.isArray(value)) return [];
+  const used = new Set<string>();
+  return value.flatMap((candidate, index): AbUnionFMark[] => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const mark = candidate as Partial<AbUnionFMark>;
+    if (!mark.point || typeof mark.point.x !== 'number' || typeof mark.point.y !== 'number') return [];
+    if (!Number.isFinite(mark.point.x) || !Number.isFinite(mark.point.y)) return [];
+    const fallbackId = `F${index + 1}`;
+    const rawId = typeof mark.id === 'string' && /^[A-Za-z0-9_-]+$/.test(mark.id) ? mark.id : fallbackId;
+    let id = rawId;
+    let suffix = 2;
+    while (used.has(id)) {
+      id = `${rawId}_${suffix}`;
+      suffix++;
+    }
+    used.add(id);
+    return [{ id, point: clampPointToHexagon(mark.point) }];
+  });
+}
+
 function normalizeCoincidenceLocks(value: unknown, labels: AbUnionLabel[]): AbUnionCoincidenceLock[] {
   if (!Array.isArray(value)) return [];
   const ids = new Set(labels.map((label) => label.id));
@@ -1367,7 +1530,8 @@ function normalizeAbUnionState(state: AbUnionState): void {
   state.tool = legacy.tool === 'add' ||
     legacy.tool === 'delete' ||
     legacy.tool === 'd-mark' ||
-    legacy.tool === 's-mark'
+    legacy.tool === 's-mark' ||
+    legacy.tool === 'f-mark'
     ? legacy.tool
     : 'move';
   state.centerLocked = Boolean(state.centerLocked);
@@ -1383,6 +1547,11 @@ function normalizeAbUnionState(state: AbUnionState): void {
       }).slice(-2)
     : [];
   state.coincidenceLocks = normalizeCoincidenceLocks(state.coincidenceLocks, state.labels);
+  state.fMarks = normalizeFMarks(state.fMarks);
+  state.selectedFMarkId = typeof state.selectedFMarkId === 'string' &&
+    state.fMarks.some((mark) => mark.id === state.selectedFMarkId)
+    ? state.selectedFMarkId
+    : null;
   state.status = typeof state.status === 'string' ? state.status : 'Move mode: drag edge dots or center geometry.';
 }
 
@@ -1605,6 +1774,8 @@ export function createDefaultAbUnionState(): AbUnionState {
     labels: [],
     selectedMarkSources: [],
     coincidenceLocks: [],
+    fMarks: [],
+    selectedFMarkId: null,
     status: 'Move mode: drag edge dots or center geometry.',
     lastOptimized: null,
   };
@@ -1671,6 +1842,8 @@ export function renderAbUnion(
   ctx.drawImage(cache.offscreen, 0, 0, config.canvasSize, config.canvasSize);
   const thetaResult = computeThetaTriangle(cache, state.theta, state.quality);
   const farPair = state.showFarPair ? findFarRedPair(cache) : null;
+  const currentFMarkDistance = fMarkDistance(state);
+  const currentFMarkTriangle = fMarkTriangle(state);
   if (state.showThetaTriangle) {
     drawThetaTriangle(ctx, thetaResult.vertices);
   }
@@ -1679,6 +1852,8 @@ export function renderAbUnion(
   drawActiveBoundaries(ctx, cache, state);
   drawSelectedMarkSources(ctx, state, triangleState);
   drawPointsAndVertices(ctx, state);
+  drawFMarkDistance(ctx, state, currentFMarkDistance);
+  drawFMarkOverlay(ctx, state, currentFMarkTriangle);
   drawAbUnionLabels(ctx, state);
   const containment = computeCenterContainment(cache, state, triangleState, localCs);
 
@@ -1691,6 +1866,9 @@ export function renderAbUnion(
     centerFailures: containment.failures,
     farPair,
     minEqualityGap: minEqualityGap(state),
+    fMarkCount: state.fMarks.length,
+    fMarkDistance: currentFMarkDistance,
+    fMarkTriangleSide: currentFMarkTriangle?.side ?? null,
     edgeRows: edgeRowsForState(state),
     regionRows: regionRowsForState(state),
     activeLabel: activeLabel(state.activeRegions),
@@ -1745,6 +1923,20 @@ function hitDotTarget(mouse: Point, state: AbUnionState, pointerType: string): A
     }
   }
 
+  return best;
+}
+
+function hitFMarkTarget(mouse: Point, state: AbUnionState, pointerType: string): AbUnionFMark | null {
+  const pointHit = scaleToMath(POINT_HIT_PX * getHitScale(pointerType));
+  let best: AbUnionFMark | null = null;
+  let bestDistance = Infinity;
+  for (const mark of state.fMarks) {
+    const d = distance(mouse, mark.point);
+    if (d <= pointHit && d < bestDistance) {
+      best = mark;
+      bestDistance = d;
+    }
+  }
   return best;
 }
 
@@ -1982,6 +2174,21 @@ function updateCursor(
   }
 }
 
+function updateFMarkCursor(
+  canvas: HTMLCanvasElement,
+  mouse: Point,
+  state: AbUnionState,
+  pointerType: string,
+): void {
+  if (hitFMarkTarget(mouse, state, pointerType)) {
+    canvas.style.cursor = 'grab';
+  } else if (pointInClosedHex(mouse)) {
+    canvas.style.cursor = 'crosshair';
+  } else {
+    canvas.style.cursor = 'default';
+  }
+}
+
 export function setupAbUnionInteraction(
   canvas: HTMLCanvasElement,
   isEnabled: () => boolean,
@@ -2023,6 +2230,24 @@ export function setupAbUnionInteraction(
         render();
         event.preventDefault();
       }
+      return;
+    }
+
+    if (state.tool === 'f-mark') {
+      const existingMark = hitFMarkTarget(mouse, state, pointerType);
+      const id = existingMark?.id ?? addAbUnionFMark(state, mouse);
+      if (existingMark) {
+        state.selectedFMarkId = existingMark.id;
+        state.status = `Selected ${existingMark.id}.`;
+      }
+      if (id) {
+        interaction = { kind: 'dragging-f-mark', id, startMouse: mouse, moved: false };
+        activePointerId = event.pointerId;
+        activePointerType = pointerType;
+        canvas.setPointerCapture(event.pointerId);
+      }
+      render();
+      event.preventDefault();
       return;
     }
 
@@ -2095,6 +2320,10 @@ export function setupAbUnionInteraction(
         canvas.style.cursor = source ? 'crosshair' : 'default';
         return;
       }
+      if (state.tool === 'f-mark') {
+        updateFMarkCursor(canvas, mouse, state, pointerType);
+        return;
+      }
       updateCursor(canvas, hitTest(mouse, state, triangleState, getLocalCs(), pointerType), state.centerMode, state.tool);
       return;
     }
@@ -2111,6 +2340,10 @@ export function setupAbUnionInteraction(
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
       setDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
+    } else if (interaction.kind === 'dragging-f-mark') {
+      interaction.moved = interaction.moved
+        || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
+      moveAbUnionFMark(state, interaction.id, mouse);
     } else if (interaction.kind === 'dragging-local-c') {
       onLocalCChange(interaction.index, projectLocalC(mouse, interaction.index));
     } else if (interaction.kind === 'dragging-center') {
@@ -2164,7 +2397,11 @@ export function setupAbUnionInteraction(
     }
 
     stop();
-    updateCursor(canvas, hit, state.centerMode, state.tool);
+    if (state.tool === 'f-mark') {
+      updateFMarkCursor(canvas, mouse, state, activePointerType);
+    } else {
+      updateCursor(canvas, hit, state.centerMode, state.tool);
+    }
   }
 
   function onPointerCancel(event: PointerEvent): void {

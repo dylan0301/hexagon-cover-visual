@@ -99,8 +99,10 @@ import {
   abUnionCoincidenceTargets,
   abUnionAValues,
   abUnionBValues,
+  clearAbUnionFMarks,
   createDefaultAbUnionState,
   deleteAbUnionLabel,
+  deleteSelectedAbUnionFMark,
   optimizeAbUnionTheta,
   renderAbUnion,
   setAbUnionCoincidenceLock,
@@ -2195,14 +2197,22 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
         ? `found d=${result.farPair.distance.toFixed(5)}`
         : `best d=${result.farPair.distance.toFixed(5)} <= 1`;
   const farPairClass = result.farPair?.exceedsUnit ? 'ab-union-bad' : '';
+  const fMarkText = result.fMarkCount === 0
+    ? 'none'
+    : result.fMarkDistance !== null
+      ? `distance=${result.fMarkDistance.toFixed(5)}`
+      : result.fMarkTriangleSide !== null
+        ? `side=${result.fMarkTriangleSide.toFixed(5)}`
+        : `${result.fMarkCount} dot${result.fMarkCount === 1 ? '' : 's'}`;
   const toolLabels: Record<AbUnionTool, string> = {
     move: 'Move',
     add: 'Add',
     delete: 'Delete',
     'd-mark': 'd-mark',
     's-mark': 's-mark',
+    'f-mark': 'f mark',
   };
-  const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark'] as AbUnionTool[]).map((tool) => `
+  const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark', 'f-mark'] as AbUnionTool[]).map((tool) => `
     <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
   const regionRowsHtml = result.regionRows.map((row) => `
@@ -2241,6 +2251,12 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     <div class="ab-union-toolbar">
       <span>tool</span>
       ${toolControls}
+    </div>
+    <div class="ab-union-toolbar">
+      <span>f marks</span>
+      <button type="button" class="free-button" data-ab-fmark-delete${abUnionState.selectedFMarkId ? '' : ' disabled'}>delete selected</button>
+      <button type="button" class="free-button" data-ab-fmark-clear${result.fMarkCount > 0 ? '' : ' disabled'}>clear</button>
+      <span class="free-small-status">${escapeHtml(fMarkText)}</span>
     </div>
     <div class="ab-union-toolbar">
       <label><input type="checkbox" data-ab-show-region${abUnionState.showRegion ? ' checked' : ''}/>show region</label>
@@ -2288,6 +2304,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>center shape</span><strong>${escapeHtml(abUnionCenterLabel(abUnionState.centerMode))}</strong>
       <span>center contains U</span><strong class="${centerContainsClass}">${escapeHtml(centerContainsText)}</strong>
       <span>red pair search</span><strong class="${farPairClass}">${escapeHtml(farPairText)}</strong>
+      <span>f marks</span><strong>${escapeHtml(fMarkText)}</strong>
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
@@ -2954,8 +2971,18 @@ abUnionControls.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const tool = target.dataset.abTool;
-  if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark') {
+  if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark' || tool === 'f-mark') {
     setAbUnionTool(abUnionState, tool);
+    render();
+    return;
+  }
+  if (target.dataset.abFmarkDelete !== undefined) {
+    deleteSelectedAbUnionFMark(abUnionState);
+    render();
+    return;
+  }
+  if (target.dataset.abFmarkClear !== undefined) {
+    clearAbUnionFMarks(abUnionState);
     render();
     return;
   }

@@ -39,6 +39,7 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 
 - Use `Move`, `Add`, and `Delete` to edit boundary dots on each edge `e_i=[V_i,V_{i+1}]`.
 - Use `d-mark` and `s-mark` to label intersections between the active C-triangle or C-circle boundary and the fixed skeleton. `D` labels recompute when the geometry changes; `S` labels keep the point created at click time.
+- Use `f mark` to place free dots inside the hexagon; two dots show their blue distance, and three or more show the optimized yellow enclosing equilateral triangle.
 - Each edge has one shared dot or two ordered dots.  On `e_i`, the left dot gives `b_i`; the right dot gives `a_{i+1}` by distance from the right endpoint.
 - Click `V_i` to toggle the boundary of `R_i`.  In `Move`, a left split dot toggles `R_i`, a right split dot toggles `R_{i+1}`, and a shared dot toggles both.
 - `show region` controls the shaded covered-region fill.
