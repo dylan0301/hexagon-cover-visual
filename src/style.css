@@ -372,6 +372,7 @@ canvas {
 .free-toolbar input,
 .ab-union-toolbar select,
 .ab-union-row input,
+.ab-hull-debug-number,
 .free-triangle-row select,
 .free-manual-input,
 .free-target-t-input {
@@ -384,6 +385,28 @@ canvas {
 
 .free-target-t-input {
   width: 72px;
+}
+
+.ab-hull-debug-number {
+  width: 78px;
+}
+
+#ab-hull-debug-vertices,
+#ab-hull-debug-export-json {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+#ab-hull-debug-export-json {
+  min-height: 180px;
 }
 
 .free-button {

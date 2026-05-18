@@ -330,6 +330,7 @@ Optional UI modifiers:
 
 - Individual region visibility affects only the displayed covered fill.
 - `clip to corner sectors` clips each `R_i` by the adjacent half-diagonal sector; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
+- `hex-axis hull` replaces rows with `a_i+b_i < 1` by a coarse sampled hull clipped in the third hex direction. The target clip lines pass through the adjacent-edge boundary hits `(h(a_i),0)` and `(0,h(b_i))`, where `h(t)=(-t+sqrt(4-3t^2))/2`; if needed they relax to the sampled exact support so the hull still contains the sampled region. Other rows fall back to the exact sampled predicate.
 - The red-pair search checks sampled points of `U` for a witness pair with Euclidean distance greater than `1`.
 - `Move`, `Add`, and `Delete` tools edit the edge dots.  An edge has at least one dot and at most two dots.
 - `d-mark` and `s-mark` labels are UI annotations for intersections between the C-triangle or C-circle boundary and a fixed hexagon edge or half-diagonal. `D` labels recompute; `S` labels are frozen at creation time.

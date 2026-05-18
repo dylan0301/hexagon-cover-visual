@@ -33,6 +33,7 @@ const TOUCH_HIT_SCALE = 1.75;
 const COVER_RGBA = [157, 219, 198, 150] as const;
 const UNCOVERED_RGBA = [220, 38, 38, 145] as const;
 const BOUNDARY_COLORS = ['#344e86', '#8a3ffc', '#0f766e', '#b45309', '#be123c', '#475569'];
+const HEX_AXIS_HULL_STEPS = 3;
 const FAR_PAIR_DIRECTIONS = Array.from({ length: 48 }, (_, index) => {
   const angle = Math.PI * index / 48;
   return { x: Math.cos(angle), y: Math.sin(angle) };
@@ -100,6 +101,7 @@ export interface AbUnionState {
   showThetaTriangle: boolean;
   showFarPair: boolean;
   clipToCornerSectors: boolean;
+  useAxisAlignedHull: boolean;
   regionVisible: boolean[];
   aLocked: boolean[];
   bLocked: boolean[];
@@ -178,6 +180,15 @@ interface MaskCache {
   localV: Float32Array[];
   maskBits: Uint8Array;
 }
+
+export interface AbUnionHexAxisHull {
+  maxU: number;
+  heights: number[];
+  minDelta: number;
+  maxDelta: number;
+}
+
+type HexAxisHull = AbUnionHexAxisHull;
 
 type PointerInteraction =
   | { kind: 'idle' }
@@ -431,8 +442,168 @@ function containsConeRegion(u: number, v: number, outLen: number, inLen: number)
   return false;
 }
 
+export function containsAbUnionLocal(u: number, v: number, a: number, b: number): boolean {
+  return containsConeRegion(u, v, b, a);
+}
+
 function inCornerSector(u: number, v: number): boolean {
   return u <= 1 + EPS && v <= 1 + EPS;
+}
+
+function containsExactRegionLocal(
+  state: AbUnionState,
+  u: number,
+  v: number,
+  outLen: number,
+  inLen: number,
+): boolean {
+  return (
+    (!state.clipToCornerSectors || inCornerSector(u, v)) &&
+    containsConeRegion(u, v, outLen, inLen)
+  );
+}
+
+function shouldUseHexAxisHull(state: AbUnionState, outLen: number, inLen: number): boolean {
+  return state.useAxisAlignedHull && outLen + inLen < 1 - EPS;
+}
+
+function emptyHexAxisHull(): HexAxisHull {
+  return {
+    maxU: 0,
+    heights: Array(HEX_AXIS_HULL_STEPS).fill(Number.NEGATIVE_INFINITY),
+    minDelta: 0,
+    maxDelta: 0,
+  };
+}
+
+export function abUnionAdjacentBoundaryHit(edgeOppositeLength: number): number {
+  const value = clamp01(edgeOppositeLength);
+  return Math.max(0, (-value + Math.sqrt(Math.max(0, 4 - 3 * value * value))) / 2);
+}
+
+function buildHexAxisHullFromSamples(
+  sampleCount: number,
+  getU: (index: number) => number,
+  getV: (index: number) => number,
+  containsSample: (index: number, u: number, v: number) => boolean,
+  outLen: number,
+  inLen: number,
+  margin: number,
+): HexAxisHull {
+  let found = false;
+  let maxU = 0;
+  let minDelta = Number.POSITIVE_INFINITY;
+  let maxDelta = Number.NEGATIVE_INFINITY;
+
+  for (let k = 0; k < sampleCount; k++) {
+    const u = getU(k);
+    const v = getV(k);
+    if (!containsSample(k, u, v)) continue;
+    found = true;
+    maxU = Math.max(maxU, u);
+    minDelta = Math.min(minDelta, u - v);
+    maxDelta = Math.max(maxDelta, u - v);
+  }
+
+  if (!found) return emptyHexAxisHull();
+
+  const hullMaxU = maxU + margin;
+  const slabWidth = hullMaxU / HEX_AXIS_HULL_STEPS;
+  const rawHeights = Array(HEX_AXIS_HULL_STEPS).fill(Number.NEGATIVE_INFINITY);
+
+  for (let k = 0; k < sampleCount; k++) {
+    const u = getU(k);
+    const v = getV(k);
+    if (!containsSample(k, u, v)) continue;
+    const slab = slabWidth <= EPS
+      ? 0
+      : Math.min(HEX_AXIS_HULL_STEPS - 1, Math.max(0, Math.floor(Math.max(0, u) / slabWidth)));
+    rawHeights[slab] = Math.max(rawHeights[slab], Math.max(0, v) + margin);
+  }
+
+  for (let i = 1; i < rawHeights.length; i++) {
+    if (rawHeights[i] === Number.NEGATIVE_INFINITY) rawHeights[i] = rawHeights[i - 1];
+  }
+  for (let i = rawHeights.length - 2; i >= 0; i--) {
+    if (rawHeights[i] === Number.NEGATIVE_INFINITY) rawHeights[i] = rawHeights[i + 1];
+  }
+
+  const heights = rawHeights.slice();
+  for (let i = heights.length - 2; i >= 0; i--) {
+    heights[i] = Math.max(heights[i], heights[i + 1]);
+  }
+
+  return {
+    maxU: hullMaxU,
+    heights,
+    minDelta: Math.min(-abUnionAdjacentBoundaryHit(outLen), minDelta) - margin,
+    maxDelta: Math.max(abUnionAdjacentBoundaryHit(inLen), maxDelta) + margin,
+  };
+}
+
+function buildHexAxisHull(
+  cache: MaskCache,
+  state: AbUnionState,
+  regionIndex: number,
+  outLen: number,
+  inLen: number,
+): HexAxisHull {
+  return buildHexAxisHullFromSamples(
+    cache.pixelIndex.length,
+    (index) => cache.localU[regionIndex][index],
+    (index) => cache.localV[regionIndex][index],
+    (_index, u, v) => containsExactRegionLocal(state, u, v, outLen, inLen),
+    outLen,
+    inLen,
+    2 / cache.scale,
+  );
+}
+
+export function buildAbUnionLocalHexAxisHull(
+  a: number,
+  b: number,
+  sampleSteps: number,
+  margin: number,
+): AbUnionHexAxisHull {
+  const steps = Math.max(1, Math.floor(sampleSteps));
+  const samplesPerAxis = steps + 1;
+  const sampleCount = samplesPerAxis * samplesPerAxis;
+  const outLen = clamp01(b);
+  const inLen = clamp01(a);
+
+  return buildHexAxisHullFromSamples(
+    sampleCount,
+    (index) => Math.floor(index / samplesPerAxis) / steps,
+    (index) => (index % samplesPerAxis) / steps,
+    (_index, u, v) => containsConeRegion(u, v, outLen, inLen),
+    outLen,
+    inLen,
+    Math.max(0, margin),
+  );
+}
+
+function buildHexAxisHulls(
+  cache: MaskCache,
+  state: AbUnionState,
+  out: number[],
+  inc: number[],
+): Array<HexAxisHull | null> {
+  return Array.from({ length: 6 }, (_, index) =>
+    shouldUseHexAxisHull(state, out[index], inc[index])
+      ? buildHexAxisHull(cache, state, index, out[index], inc[index])
+      : null,
+  );
+}
+
+function pointInHexAxisHull(u: number, v: number, hull: HexAxisHull): boolean {
+  if (u < -EPS || v < -EPS || u > hull.maxU + EPS) return false;
+  const delta = u - v;
+  if (delta < hull.minDelta - EPS || delta > hull.maxDelta + EPS) return false;
+  const slabWidth = hull.maxU / HEX_AXIS_HULL_STEPS;
+  const slab = slabWidth <= EPS
+    ? 0
+    : Math.min(HEX_AXIS_HULL_STEPS - 1, Math.max(0, Math.floor(Math.max(0, u) / slabWidth)));
+  return v <= hull.heights[slab] + EPS;
 }
 
 function buildMask(cache: MaskCache, state: AbUnionState): number {
@@ -440,6 +611,7 @@ function buildMask(cache: MaskCache, state: AbUnionState): number {
   data.fill(0);
   const out = Array.from({ length: 6 }, (_, index) => bValue(state, index));
   const inc = Array.from({ length: 6 }, (_, index) => aValue(state, index));
+  const hexAxisHulls = buildHexAxisHulls(cache, state, out, inc);
   let uncoveredCount = 0;
 
   for (let k = 0; k < cache.pixelIndex.length; k++) {
@@ -447,10 +619,8 @@ function buildMask(cache: MaskCache, state: AbUnionState): number {
     for (let i = 0; i < 6; i++) {
       const u = cache.localU[i][k];
       const v = cache.localV[i][k];
-      if (
-        (!state.clipToCornerSectors || inCornerSector(u, v)) &&
-        containsConeRegion(u, v, out[i], inc[i])
-      ) {
+      const hull = hexAxisHulls[i];
+      if (hull ? pointInHexAxisHull(u, v, hull) : containsExactRegionLocal(state, u, v, out[i], inc[i])) {
         bits |= 1 << i;
       }
     }
@@ -1547,6 +1717,7 @@ function normalizeAbUnionState(state: AbUnionState): void {
     ? legacy.tool
     : 'move';
   state.centerLocked = Boolean(state.centerLocked);
+  state.useAxisAlignedHull = Boolean(state.useAxisAlignedHull);
   state.regionVisible = Array.from({ length: 6 }, (_, index) => state.regionVisible?.[index] ?? true);
   state.aLocked = normalizeLockArray(state.aLocked);
   state.bLocked = normalizeLockArray(state.bLocked);
@@ -2107,6 +2278,7 @@ export function createDefaultAbUnionState(): AbUnionState {
     showThetaTriangle: true,
     showFarPair: true,
     clipToCornerSectors: false,
+    useAxisAlignedHull: false,
     regionVisible: Array(6).fill(true),
     aLocked: Array(6).fill(false),
     bLocked: Array(6).fill(false),
@@ -2155,6 +2327,7 @@ function evaluateState(
   const tempState = createDefaultAbUnionState();
   tempState.edgeDots = state.edgeDots.map((edge) => ({ ...edge }));
   tempState.clipToCornerSectors = state.clipToCornerSectors;
+  tempState.useAxisAlignedHull = state.useAxisAlignedHull;
   tempState.showRegion = false;
   buildMask(cache, tempState);
 

@@ -44,6 +44,7 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - Click `V_i` to toggle the boundary of `R_i`.  In `Move`, a left split dot toggles `R_i`, a right split dot toggles `R_{i+1}`, and a shared dot toggles both.
 - `show region` controls the shaded covered-region fill.
 - `visible regions` checkboxes control which individual `R_i` fills contribute to the shaded union.
+- `hex-axis hull` replaces each row with `a_i+b_i < 1` by a coarse hull clipped in the third hex direction, using the adjacent-edge boundary hits when they are supporting and relaxing only as needed to keep containment; other rows keep the exact region mask.
 - `show purple triangle` toggles the sampled enclosing equilateral triangle for the current `theta`.
 - `show red pair > 1` continuously searches the red uncovered region for a sampled pair farther than distance `1` and draws the witness when found.
 - `clip to corner sectors` clips `R_i` to the sector bounded by the adjacent half-diagonals; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
@@ -51,3 +52,17 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - Mark sources are hexagon edges, half-diagonals, and the active C-triangle or C-circle boundary. Manual `c_i` hulls and `R_i` boundaries are not mark sources.
 - Labels on perimeter edges show one-time snap buttons and persistent lock checkboxes for the eligible edge dot. Snaps and locks respect the existing `same a` and `same b` lock groups.
 - The region table includes `same a` and `same b` checkboxes. Checked values move as locked groups while preserving the edge-dot order.
+
+## `Hull debug` mode
+
+`Hull debug` is a diagnostic local view for sketching a desired hex-axis hull around one strict `R(a,b)` set. The default example is `a=0.20`, `b=0.50`.
+
+- The canvas shows local coordinates: `u` points from `V_i` to `V_{i+1}`, and `v` points from `V_i` to `V_{i-1}`.
+- The exact sampled AB-union set, required points, and adjacent-edge boundary hits are drawn as references.
+- `load suggested hull` replaces the current polygon with the code-generated hex-axis hull for the current `a,b`, then closes it for local editing.
+- Click to add polygon vertices. On a closed polygon, click an edge to insert a new dot on that edge.
+- Drag vertices to adjust them while preserving snapped edge directions where possible.
+- Select a dot and use `delete selected dot`, Backspace, or Delete to remove it while preserving local axis alignment.
+- Close the polygon to check whether it contains all sampled exact-region points. Missed samples are highlighted in red, and the vertex list is shown for copying.
+- `export current` appends the current `a`, `b`, polygon vertices, and sampled coverage data to the experiment JSON. Repeated exports stay in the same JSON block until `clear exports`.
+- This mode is exploratory only; it does not change the normal `ab union` mask or hull algorithm.

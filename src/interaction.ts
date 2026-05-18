@@ -165,7 +165,10 @@ export function setupInteraction(
 
   function isPointToolActive(): boolean {
     const shapeMode = getShapeMode();
-    return !!pointTool?.isActive() && shapeMode !== 'free' && shapeMode !== 'ab-union';
+    return !!pointTool?.isActive() &&
+      shapeMode !== 'free' &&
+      shapeMode !== 'ab-union' &&
+      shapeMode !== 'ab-hull-debug';
   }
 
   function getPointSeedUnderPoint(mouse: Point, pointerType: string): string | null {
@@ -194,7 +197,7 @@ export function setupInteraction(
 
     const shapeMode = getShapeMode();
 
-    if (shapeMode === 'local-c' || shapeMode === 'free' || shapeMode === 'ab-union') {
+    if (shapeMode === 'local-c' || shapeMode === 'free' || shapeMode === 'ab-union' || shapeMode === 'ab-hull-debug') {
       return { kind: 'none' };
     }
 
@@ -322,7 +325,7 @@ export function setupInteraction(
     const halfDiagonalIndex = getHalfDiagonalHoverIndex(mouse, pointerType);
     const hit = hitTest(mouse, pointerType);
     const shapeMode = getShapeMode();
-    if (shapeMode === 'free' || shapeMode === 'ab-union') {
+    if (shapeMode === 'free' || shapeMode === 'ab-union' || shapeMode === 'ab-hull-debug') {
       updateCursor(mouse, pointerType);
       return;
     }
@@ -405,7 +408,7 @@ export function setupInteraction(
     const pointerType =
       activePointerId === e.pointerId ? activePointerType : (e.pointerType || 'mouse');
     const mouse = getPointerMath(e);
-    if (getShapeMode() === 'ab-union') {
+    if (getShapeMode() === 'ab-union' || getShapeMode() === 'ab-hull-debug') {
       return;
     }
     if (isPointToolActive() && pointTool) {

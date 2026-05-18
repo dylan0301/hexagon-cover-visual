@@ -119,6 +119,22 @@ import {
   type AbUnionRenderResult,
   type AbUnionTool,
 } from './abUnion';
+import {
+  clearAbHullDebugPolygon,
+  clearAbHullDebugExports,
+  closeAbHullDebugPolygon,
+  createDefaultAbHullDebugState,
+  deleteSelectedAbHullDebugVertex,
+  exportAbHullDebugExperiment,
+  formatAbHullDebugExports,
+  loadSuggestedAbHullDebugPolygon,
+  renderAbHullDebug,
+  resetAbHullDebugExample,
+  setAbHullDebugParameter,
+  setupAbHullDebugInteraction,
+  undoAbHullDebugVertex,
+  type AbHullDebugResult,
+} from './abHullDebug';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -172,6 +188,7 @@ const freeStateStatus = document.getElementById('free-state-status') as HTMLDivE
 const freeStateCopyButton = document.getElementById('free-state-copy') as HTMLButtonElement;
 const freeStateLoadButton = document.getElementById('free-state-load') as HTMLButtonElement;
 const abUnionPanel = document.getElementById('ab-union-panel') as HTMLDivElement;
+const abUnionPanelTitle = document.getElementById('ab-union-panel-title') as HTMLDivElement;
 const abUnionControls = document.getElementById('ab-union-controls') as HTMLDivElement;
 
 const triangleState: TriangleState = {
@@ -204,6 +221,8 @@ let currentV0Sample: VSample | RejectedSample | null = null;
 let currentCSample: CSample | RejectedSample | null = null;
 let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
+let abHullDebugState = createDefaultAbHullDebugState();
+let currentAbHullDebugResult: AbHullDebugResult | null = null;
 
 interface ControllerSnapshot {
   version: 4;
@@ -657,7 +676,12 @@ function isPoint(value: unknown): value is Point {
 }
 
 function isShapeMode(value: unknown): value is ShapeMode {
-  return value === 'triangle' || value === 'local-c' || value === 'circle' || value === 'free' || value === 'ab-union';
+  return value === 'triangle' ||
+    value === 'local-c' ||
+    value === 'circle' ||
+    value === 'free' ||
+    value === 'ab-union' ||
+    value === 'ab-hull-debug';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -2265,6 +2289,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
+      <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
       <label>center
         <select data-ab-center-mode>
@@ -2308,6 +2333,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>red pair search</span><strong class="${farPairClass}">${escapeHtml(farPairText)}</strong>
       <span>f marks</span><strong>${escapeHtml(fMarkText)}</strong>
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
+      <span>region model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
@@ -2327,6 +2353,56 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   `;
 }
 
+function renderAbHullDebugPanel(result: AbHullDebugResult): void {
+  const coverageClass = result.closed && result.missedCount === 0
+    ? 'ab-union-ok'
+    : result.closed ? 'ab-union-bad' : '';
+  const coverageText = result.closed
+    ? result.missedCount === 0
+      ? `contains all ${result.sampleCount} samples`
+      : `misses ${result.missedCount} of ${result.sampleCount}`
+    : `${result.sampleCount} exact samples; polygon open`;
+  const exportCount = abHullDebugState.exports.length;
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-toolbar">
+      <label>a
+        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
+      <label>b
+        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
+      <span class="free-small-status">a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}</span>
+    </div>
+    <div class="ab-union-toolbar">
+      <button type="button" class="free-button" data-hull-debug-close${abHullDebugState.vertices.length >= 3 && !abHullDebugState.closed ? '' : ' disabled'}>close polygon</button>
+      <button type="button" class="free-button" data-hull-debug-undo${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>undo</button>
+      <button type="button" class="free-button" data-hull-debug-delete${abHullDebugState.selectedIndex !== null && (!abHullDebugState.closed || abHullDebugState.vertices.length > 3) ? '' : ' disabled'}>delete selected dot</button>
+      <button type="button" class="free-button" data-hull-debug-clear${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>clear</button>
+      <button type="button" class="free-button" data-hull-debug-suggested>load suggested hull</button>
+      <button type="button" class="free-button" data-hull-debug-reset>reset example</button>
+    </div>
+    <div class="ab-union-toolbar">
+      <button type="button" class="free-button" data-hull-debug-export${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>export current</button>
+      <button type="button" class="free-button" data-hull-debug-copy-exports${exportCount > 0 ? '' : ' disabled'}>copy json</button>
+      <button type="button" class="free-button" data-hull-debug-clear-exports${exportCount > 0 ? '' : ' disabled'}>clear exports</button>
+      <span class="free-small-status">${exportCount} exported</span>
+    </div>
+    <div class="ab-union-readout">
+      <span>coverage</span><strong class="${coverageClass}">${escapeHtml(coverageText)}</strong>
+      <span>vertices</span><strong>${abHullDebugState.vertices.length}${abHullDebugState.closed ? ' closed' : ''}</strong>
+      <span>edge directions</span><strong>u, v, u-v</strong>
+      <span>status</span><strong>${escapeHtml(abHullDebugState.status)}</strong>
+    </div>
+    <div class="ab-union-section-title">current polygon</div>
+    <textarea id="ab-hull-debug-vertices" readonly spellcheck="false">${escapeHtml(result.vertexText)}</textarea>
+    <div class="ab-union-section-title">experiment json</div>
+    <textarea id="ab-hull-debug-export-json" readonly spellcheck="false">${escapeHtml(formatAbHullDebugExports(abHullDebugState))}</textarea>
+  `;
+}
+
 function toggleSelectedHalfDiagonal(index: number): void {
   const existingIndex = selectedHalfDiagonalIndices.indexOf(index);
   if (existingIndex >= 0) {
@@ -2338,12 +2414,12 @@ function toggleSelectedHalfDiagonal(index: number): void {
 }
 
 function isCoverOverlayAvailable(): boolean {
-  return shapeMode !== 'free' && shapeMode !== 'ab-union';
+  return shapeMode !== 'free' && shapeMode !== 'ab-union' && shapeMode !== 'ab-hull-debug';
 }
 
 function syncPointToolControls(): void {
   normalizeSelectedPointSeed();
-  const visible = shapeMode !== 'free' && shapeMode !== 'ab-union';
+  const visible = shapeMode !== 'free' && shapeMode !== 'ab-union' && shapeMode !== 'ab-hull-debug';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -2360,6 +2436,8 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'Free mode';
   } else if (shapeMode === 'ab-union') {
     shapeTitle.textContent = 'ab union';
+  } else if (shapeMode === 'ab-hull-debug') {
+    shapeTitle.textContent = 'AB hull debug';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -2371,11 +2449,13 @@ function syncModeButtons(): void {
   }
   const freeActive = shapeMode === 'free';
   const abUnionActive = shapeMode === 'ab-union';
-  sliderRow.hidden = freeActive || abUnionActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive;
+  const abHullDebugActive = shapeMode === 'ab-hull-debug';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive;
+  abUnionPanelTitle.textContent = abHullDebugActive ? 'AB hull debug' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -2470,7 +2550,7 @@ function render(): void {
     const abResult = renderAbUnion(ctx, abUnionState, triangleState, manualLocalCs);
 
     gammaValues.textContent = `${formatAbUnionValues('a', abUnionAValues(abUnionState))}; ${formatAbUnionValues('b', abUnionBValues(abUnionState))}`;
-    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}`;
+    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}, region = ${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}`;
     localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min equality gap = ${abResult.minEqualityGap.toExponential(3)}`;
     ceStatus.textContent = 'ab union: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
@@ -2485,6 +2565,30 @@ function render(): void {
     coverOverlayStatus.textContent = abUnionState.showRegion ? 'union region visible' : 'union region hidden';
     coverOverlayStatus.style.color = '#475569';
     renderAbUnionPanel(abResult);
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'ab-hull-debug') {
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    const result = renderAbHullDebug(ctx, abHullDebugState);
+    currentAbHullDebugResult = result;
+
+    gammaValues.textContent = `hull debug: a=${abHullDebugState.a.toFixed(3)}, b=${abHullDebugState.b.toFixed(3)}, a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}`;
+    localCBounds.textContent = 'local view: u along V_i to V_{i+1}, v along V_i to V_{i-1}';
+    localCValues.textContent = result.closed
+      ? result.missedCount === 0
+        ? 'drawn polygon contains sampled exact set'
+        : `drawn polygon misses ${result.missedCount} sampled points`
+      : 'click vertices, then close polygon';
+    ceStatus.textContent = 'Hull debug: diagnostic drawing mode';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = 'Snaps to hex-axis directions: u, v, and u-v';
+    ceChainStatus.style.color = '#475569';
+    coverOverlayStatus.textContent = 'Hull debug does not change ab union masks';
+    coverOverlayStatus.style.color = '#64748b';
+    regionRenderer.render();
+    renderAbHullDebugPanel(result);
     syncControllerSnapshot();
     return;
   }
@@ -2969,9 +3073,71 @@ freeStateLoadButton.addEventListener('click', () => {
   }
 });
 
-abUnionControls.addEventListener('click', (event) => {
+abUnionControls.addEventListener('click', async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  if (target.dataset.hullDebugClose !== undefined) {
+    closeAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugUndo !== undefined) {
+    undoAbHullDebugVertex(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugDelete !== undefined) {
+    deleteSelectedAbHullDebugVertex(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugClear !== undefined) {
+    clearAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugReset !== undefined) {
+    resetAbHullDebugExample(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugSuggested !== undefined) {
+    loadSuggestedAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugExport !== undefined) {
+    if (currentAbHullDebugResult) {
+      exportAbHullDebugExperiment(abHullDebugState, currentAbHullDebugResult);
+    }
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugClearExports !== undefined) {
+    clearAbHullDebugExports(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugCopyExports !== undefined) {
+    const exportCount = abHullDebugState.exports.length;
+    if (exportCount === 0) {
+      abHullDebugState.status = 'No exported experiments to copy.';
+      render();
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(formatAbHullDebugExports(abHullDebugState));
+      abHullDebugState.status = `Copied ${exportCount} exported experiment${exportCount === 1 ? '' : 's'} as JSON.`;
+      render();
+    } catch {
+      abHullDebugState.status = 'Clipboard unavailable. JSON selected for manual copy.';
+      render();
+      const textarea = document.getElementById('ab-hull-debug-export-json') as HTMLTextAreaElement | null;
+      textarea?.focus();
+      textarea?.select();
+    }
+    return;
+  }
   const tool = target.dataset.abTool;
   if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark' || tool === 'f-mark') {
     setAbUnionTool(abUnionState, tool);
@@ -3021,6 +3187,12 @@ abUnionControls.addEventListener('click', (event) => {
 abUnionControls.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
+  const debugParam = target.dataset.hullDebugParam;
+  if (debugParam === 'a' || debugParam === 'b') {
+    setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
+    render();
+    return;
+  }
   if (target.dataset.abTheta !== undefined) {
     abUnionState.theta = Math.max(0, Math.min(120, Number(target.value))) * Math.PI / 180;
     abUnionState.lastOptimized = null;
@@ -3047,6 +3219,12 @@ abUnionControls.addEventListener('change', (event) => {
   }
   if (target instanceof HTMLInputElement && target.dataset.abClipSectors !== undefined) {
     abUnionState.clipToCornerSectors = target.checked;
+    abUnionState.lastOptimized = null;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abAxisHull !== undefined) {
+    abUnionState.useAxisAlignedHull = target.checked;
     abUnionState.lastOptimized = null;
     render();
     return;
@@ -3173,6 +3351,13 @@ setupAbUnionInteraction(
   (index, value) => {
     manualLocalCs[index] = clampToLocalCMax(value, 1);
   },
+  render,
+);
+
+setupAbHullDebugInteraction(
+  canvas,
+  () => shapeMode === 'ab-hull-debug',
+  () => abHullDebugState,
   render,
 );
 
