@@ -34,6 +34,7 @@ const COVER_RGBA = [157, 219, 198, 150] as const;
 const UNCOVERED_RGBA = [220, 38, 38, 145] as const;
 const BOUNDARY_COLORS = ['#344e86', '#8a3ffc', '#0f766e', '#b45309', '#be123c', '#475569'];
 const HEX_AXIS_HULL_STEPS = 3;
+const HEX_AXIS_HULL_NEAR_EQUALITY_SUM = 0.9;
 const FAR_PAIR_DIRECTIONS = Array.from({ length: 48 }, (_, index) => {
   const angle = Math.PI * index / 48;
   return { x: Math.cos(angle), y: Math.sin(angle) };
@@ -181,11 +182,17 @@ interface MaskCache {
   maskBits: Uint8Array;
 }
 
-export interface AbUnionHexAxisHull {
-  maxU: number;
-  heights: number[];
+export interface AbUnionHexAxisHullSlab {
+  uStart: number;
+  uEnd: number;
+  maxV: number;
   minDelta: number;
   maxDelta: number;
+}
+
+export interface AbUnionHexAxisHull {
+  maxU: number;
+  slabs: AbUnionHexAxisHullSlab[];
 }
 
 type HexAxisHull = AbUnionHexAxisHull;
@@ -470,15 +477,98 @@ function shouldUseHexAxisHull(state: AbUnionState, outLen: number, inLen: number
 function emptyHexAxisHull(): HexAxisHull {
   return {
     maxU: 0,
-    heights: Array(HEX_AXIS_HULL_STEPS).fill(Number.NEGATIVE_INFINITY),
-    minDelta: 0,
-    maxDelta: 0,
+    slabs: [],
   };
 }
 
 export function abUnionAdjacentBoundaryHit(edgeOppositeLength: number): number {
   const value = clamp01(edgeOppositeLength);
   return Math.max(0, (-value + Math.sqrt(Math.max(0, 4 - 3 * value * value))) / 2);
+}
+
+interface HexAxisHullSample {
+  u: number;
+  v: number;
+  delta: number;
+}
+
+interface RawHexAxisHullSlab {
+  uStart: number;
+  uEnd: number;
+  maxV: number;
+  minDelta: number;
+  maxDelta: number;
+  found: boolean;
+}
+
+function uniqueSortedBreakpoints(values: number[], maxU: number): number[] {
+  return values
+    .map((value) => Math.max(0, Math.min(maxU, value)))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+    .filter((value, index, array) => index === 0 || Math.abs(value - array[index - 1]) > EPS);
+}
+
+function adaptiveHexAxisHullBreakpoints(
+  samples: HexAxisHullSample[],
+  maxU: number,
+  outLen: number,
+  inLen: number,
+  margin: number,
+): number[] {
+  const bottomHit = abUnionAdjacentBoundaryHit(inLen);
+  const leftHit = abUnionAdjacentBoundaryHit(outLen);
+  const coarse = Array.from({ length: HEX_AXIS_HULL_STEPS + 1 }, (_, index) =>
+    (maxU * index) / HEX_AXIS_HULL_STEPS,
+  );
+
+  if (outLen + inLen < HEX_AXIS_HULL_NEAR_EQUALITY_SUM) {
+    return uniqueSortedBreakpoints(coarse, maxU);
+  }
+
+  const topStart = samples.reduce(
+    (best, sample) => sample.v >= 1 - 2 * margin ? Math.min(best, sample.u) : best,
+    Number.POSITIVE_INFINITY,
+  );
+  const rightShelfV = Math.max(0, Math.min(1, 1 - outLen + margin));
+  const rightShelfStart = samples.reduce(
+    (best, sample) => sample.v > rightShelfV + EPS ? Math.max(best, sample.u) : best,
+    0,
+  );
+  return uniqueSortedBreakpoints([
+    0,
+    1 - leftHit,
+    1 - inLen,
+    Number.isFinite(topStart) ? topStart + margin : 1 - leftHit,
+    rightShelfStart + margin,
+    bottomHit,
+    maxU,
+  ], maxU);
+}
+
+function fillRawHexAxisSlabs(slabs: RawHexAxisHullSlab[]): void {
+  let previous: RawHexAxisHullSlab | null = null;
+  for (const slab of slabs) {
+    if (slab.found) {
+      previous = slab;
+    } else if (previous) {
+      slab.maxV = previous.maxV;
+      slab.minDelta = previous.minDelta;
+      slab.maxDelta = previous.maxDelta;
+    }
+  }
+
+  let next: RawHexAxisHullSlab | null = null;
+  for (let index = slabs.length - 1; index >= 0; index--) {
+    const slab = slabs[index];
+    if (slab.found) {
+      next = slab;
+    } else if (next) {
+      slab.maxV = next.maxV;
+      slab.minDelta = next.minDelta;
+      slab.maxDelta = next.maxDelta;
+    }
+  }
 }
 
 function buildHexAxisHullFromSamples(
@@ -494,50 +584,78 @@ function buildHexAxisHullFromSamples(
   let maxU = 0;
   let minDelta = Number.POSITIVE_INFINITY;
   let maxDelta = Number.NEGATIVE_INFINITY;
+  const samples: HexAxisHullSample[] = [];
 
   for (let k = 0; k < sampleCount; k++) {
     const u = getU(k);
     const v = getV(k);
     if (!containsSample(k, u, v)) continue;
+    const delta = u - v;
     found = true;
+    samples.push({ u, v, delta });
     maxU = Math.max(maxU, u);
-    minDelta = Math.min(minDelta, u - v);
-    maxDelta = Math.max(maxDelta, u - v);
+    minDelta = Math.min(minDelta, delta);
+    maxDelta = Math.max(maxDelta, delta);
   }
 
   if (!found) return emptyHexAxisHull();
 
-  const hullMaxU = maxU + margin;
-  const slabWidth = hullMaxU / HEX_AXIS_HULL_STEPS;
-  const rawHeights = Array(HEX_AXIS_HULL_STEPS).fill(Number.NEGATIVE_INFINITY);
+  const bottomHit = abUnionAdjacentBoundaryHit(inLen);
+  const leftHit = abUnionAdjacentBoundaryHit(outLen);
+  const hullMaxU = Math.max(maxU, bottomHit) + margin;
+  const globalMinDelta = Math.min(-leftHit, minDelta) - margin;
+  const globalMaxDelta = Math.max(bottomHit, maxDelta) + margin;
+  samples.push({ u: bottomHit, v: 0, delta: bottomHit });
+  samples.push({ u: 0, v: leftHit, delta: -leftHit });
 
-  for (let k = 0; k < sampleCount; k++) {
-    const u = getU(k);
-    const v = getV(k);
-    if (!containsSample(k, u, v)) continue;
-    const slab = slabWidth <= EPS
-      ? 0
-      : Math.min(HEX_AXIS_HULL_STEPS - 1, Math.max(0, Math.floor(Math.max(0, u) / slabWidth)));
-    rawHeights[slab] = Math.max(rawHeights[slab], Math.max(0, v) + margin);
+  const breakpoints = adaptiveHexAxisHullBreakpoints(samples, hullMaxU, outLen, inLen, margin);
+  const rawSlabs: RawHexAxisHullSlab[] = [];
+  for (let index = 0; index < breakpoints.length - 1; index++) {
+    rawSlabs.push({
+      uStart: breakpoints[index],
+      uEnd: breakpoints[index + 1],
+      maxV: Number.NEGATIVE_INFINITY,
+      minDelta: Number.POSITIVE_INFINITY,
+      maxDelta: Number.NEGATIVE_INFINITY,
+      found: false,
+    });
   }
 
-  for (let i = 1; i < rawHeights.length; i++) {
-    if (rawHeights[i] === Number.NEGATIVE_INFINITY) rawHeights[i] = rawHeights[i - 1];
-  }
-  for (let i = rawHeights.length - 2; i >= 0; i--) {
-    if (rawHeights[i] === Number.NEGATIVE_INFINITY) rawHeights[i] = rawHeights[i + 1];
+  for (const sample of samples) {
+    const slabIndex = rawSlabs.findIndex((slab, index) =>
+      sample.u >= slab.uStart - EPS &&
+      (sample.u < slab.uEnd - EPS || index === rawSlabs.length - 1 && sample.u <= slab.uEnd + EPS),
+    );
+    const slab = rawSlabs[
+      slabIndex >= 0
+        ? slabIndex
+        : sample.u <= rawSlabs[0].uStart ? 0 : rawSlabs.length - 1
+    ];
+    slab.found = true;
+    slab.maxV = Math.max(slab.maxV, Math.max(0, sample.v) + margin);
+    slab.minDelta = Math.min(slab.minDelta, sample.delta);
+    slab.maxDelta = Math.max(slab.maxDelta, sample.delta);
   }
 
-  const heights = rawHeights.slice();
-  for (let i = heights.length - 2; i >= 0; i--) {
-    heights[i] = Math.max(heights[i], heights[i + 1]);
+  const useLocalDelta = outLen + inLen >= HEX_AXIS_HULL_NEAR_EQUALITY_SUM;
+  fillRawHexAxisSlabs(rawSlabs);
+  if (!useLocalDelta) {
+    for (let i = rawSlabs.length - 2; i >= 0; i--) {
+      rawSlabs[i].maxV = Math.max(rawSlabs[i].maxV, rawSlabs[i + 1].maxV);
+    }
   }
-
   return {
     maxU: hullMaxU,
-    heights,
-    minDelta: Math.min(-abUnionAdjacentBoundaryHit(outLen), minDelta) - margin,
-    maxDelta: Math.max(abUnionAdjacentBoundaryHit(inLen), maxDelta) + margin,
+    slabs: rawSlabs.map((slab) => {
+      const useLocalMaxDelta = useLocalDelta && slab.uStart >= bottomHit - EPS;
+      return {
+        uStart: slab.uStart,
+        uEnd: slab.uEnd,
+        maxV: slab.maxV,
+        minDelta: useLocalDelta ? slab.minDelta - margin : globalMinDelta,
+        maxDelta: useLocalMaxDelta ? slab.maxDelta + margin : globalMaxDelta,
+      };
+    }),
   };
 }
 
@@ -597,13 +715,17 @@ function buildHexAxisHulls(
 
 function pointInHexAxisHull(u: number, v: number, hull: HexAxisHull): boolean {
   if (u < -EPS || v < -EPS || u > hull.maxU + EPS) return false;
+  const slab = hull.slabs.find((candidate, index) =>
+    u >= candidate.uStart - EPS &&
+    (u < candidate.uEnd - EPS || index === hull.slabs.length - 1 && u <= candidate.uEnd + EPS),
+  );
+  if (!slab) return false;
   const delta = u - v;
-  if (delta < hull.minDelta - EPS || delta > hull.maxDelta + EPS) return false;
-  const slabWidth = hull.maxU / HEX_AXIS_HULL_STEPS;
-  const slab = slabWidth <= EPS
-    ? 0
-    : Math.min(HEX_AXIS_HULL_STEPS - 1, Math.max(0, Math.floor(Math.max(0, u) / slabWidth)));
-  return v <= hull.heights[slab] + EPS;
+  return (
+    delta >= slab.minDelta - EPS &&
+    delta <= slab.maxDelta + EPS &&
+    v <= slab.maxV + EPS
+  );
 }
 
 function buildMask(cache: MaskCache, state: AbUnionState): number {

@@ -202,32 +202,29 @@ function simplifyPolygon(points: AbHullDebugVertex[]): AbHullDebugVertex[] {
 }
 
 function suggestedHullToPolygon(hull: AbUnionHexAxisHull): AbHullDebugVertex[] {
-  const heights = hull.heights.map(clamp01);
   const maxU = clamp01(hull.maxU);
-  if (maxU <= 0 || heights.length === 0 || !heights.some(Number.isFinite)) return [];
-
-  const slabWidth = maxU / heights.length;
+  if (maxU <= 0 || hull.slabs.length === 0) return [];
   const lowerPoints: AbHullDebugVertex[] = [];
   const upperPoints: AbHullDebugVertex[] = [];
 
-  for (let index = 0; index < heights.length; index++) {
-    const height = heights[index];
-    const startU = index * slabWidth;
-    const endU = index === heights.length - 1 ? maxU : (index + 1) * slabWidth;
+  for (const slab of hull.slabs) {
+    const height = clamp01(slab.maxV);
+    const startU = clamp01(slab.uStart);
+    const endU = clamp01(slab.uEnd);
     if (!Number.isFinite(height) || endU < startU) continue;
 
     const candidates = sortedUnique([
       startU,
       endU,
-      hull.minDelta,
-      hull.maxDelta,
-      height + hull.minDelta,
-      height + hull.maxDelta,
+      slab.minDelta,
+      slab.maxDelta,
+      height + slab.minDelta,
+      height + slab.maxDelta,
     ].map((value) => Math.max(startU, Math.min(endU, value))));
 
     for (const u of candidates) {
-      const lower = Math.max(0, u - hull.maxDelta);
-      const upper = Math.min(height, u - hull.minDelta);
+      const lower = Math.max(0, u - slab.maxDelta);
+      const upper = Math.min(height, u - slab.minDelta);
       if (upper + 1e-8 < lower) continue;
       addPolygonPoint(lowerPoints, { u, v: lower });
       addPolygonPoint(upperPoints, { u, v: upper });
