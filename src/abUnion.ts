@@ -36,6 +36,7 @@ const UNCOVERED_RGBA = [220, 38, 38, 145] as const;
 const BOUNDARY_COLORS = ['#344e86', '#8a3ffc', '#0f766e', '#b45309', '#be123c', '#475569'];
 const HEX_AXIS_HULL_STEPS = 3;
 const HEX_AXIS_HULL_NEAR_EQUALITY_SUM = 0.9;
+const HEX_AXIS_HULL_MIN_EDGE = 0.15;
 const FAR_PAIR_DIRECTIONS = Array.from({ length: 48 }, (_, index) => {
   const angle = Math.PI * index / 48;
   return { x: Math.cos(angle), y: Math.sin(angle) };
@@ -510,6 +511,35 @@ function uniqueSortedBreakpoints(values: number[], maxU: number): number[] {
     .filter((value, index, array) => index === 0 || Math.abs(value - array[index - 1]) > EPS);
 }
 
+function coarsenHexAxisHullBreakpoints(breakpoints: number[], minEdge: number): number[] {
+  const coarsened = breakpoints.slice();
+  while (coarsened.length > 2) {
+    let shortestGap = Number.POSITIVE_INFINITY;
+    let removeIndex = -1;
+
+    for (let index = 0; index < coarsened.length - 1; index++) {
+      const gap = coarsened[index + 1] - coarsened[index];
+      if (gap >= minEdge - EPS || gap >= shortestGap) continue;
+
+      shortestGap = gap;
+      if (index === 0) {
+        removeIndex = 1;
+      } else if (index === coarsened.length - 2) {
+        removeIndex = coarsened.length - 2;
+      } else {
+        const removeLeftSpan = coarsened[index + 1] - coarsened[index - 1];
+        const removeRightSpan = coarsened[index + 2] - coarsened[index];
+        removeIndex = removeLeftSpan <= removeRightSpan ? index : index + 1;
+      }
+    }
+
+    if (removeIndex < 1 || removeIndex >= coarsened.length - 1) break;
+    coarsened.splice(removeIndex, 1);
+  }
+
+  return coarsened;
+}
+
 function adaptiveHexAxisHullBreakpoints(
   samples: HexAxisHullSample[],
   maxU: number,
@@ -524,12 +554,16 @@ function adaptiveHexAxisHullBreakpoints(
   );
 
   if (outLen + inLen < HEX_AXIS_HULL_NEAR_EQUALITY_SUM) {
-    return uniqueSortedBreakpoints(coarse, maxU);
+    return coarsenHexAxisHullBreakpoints(uniqueSortedBreakpoints(coarse, maxU), HEX_AXIS_HULL_MIN_EDGE);
   }
 
   const topStart = samples.reduce(
     (best, sample) => sample.v >= 1 - 2 * margin ? Math.min(best, sample.u) : best,
     Number.POSITIVE_INFINITY,
+  );
+  const topEnd = samples.reduce(
+    (best, sample) => sample.v >= 1 - 2 * margin ? Math.max(best, sample.u) : best,
+    0,
   );
   const rightShelfV = Math.max(0, Math.min(1, 1 - outLen + margin));
   const rightShelfStart = samples.reduce(
@@ -541,6 +575,7 @@ function adaptiveHexAxisHullBreakpoints(
     1 - leftHit,
     1 - inLen,
     Number.isFinite(topStart) ? topStart + margin : 1 - leftHit,
+    topEnd + margin,
     rightShelfStart + margin,
     bottomHit,
     maxU,

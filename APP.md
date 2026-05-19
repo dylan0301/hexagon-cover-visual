@@ -44,7 +44,7 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - Click `V_i` to toggle the boundary of `R_i`.  In `Move`, a left split dot toggles `R_i`, a right split dot toggles `R_{i+1}`, and a shared dot toggles both.
 - `original AB union` controls the shaded exact covered-region fill.
 - `visible regions` checkboxes control which individual `R_i` fills contribute to the shaded overlays.
-- `hex-axis hull` shows the hull overlay and uses it for the sampled mask. It replaces each row with `a_i+b_i < 1` by a hex-axis hull using adjacent-edge boundary hits. Near `a_i+b_i=1`, it adds local step cuts to reduce the upper/right excess while preserving sampled containment.
+- `hex-axis hull` shows the hull overlay and uses it for the sampled mask. It replaces each row with `a_i+b_i < 1` by a hex-axis hull using adjacent-edge boundary hits. Near `a_i+b_i=1`, it adds local top-start/top-end cuts to reduce the upper/right excess while preserving sampled containment.
 - `show purple triangle` toggles the sampled enclosing equilateral triangle for the current `theta`.
 - `show red pair > 1` continuously searches the red uncovered region for a sampled pair farther than distance `1` and draws the witness when found.
 - `clip to corner sectors` clips `R_i` to the sector bounded by the adjacent half-diagonals; locally this is `0 <= u <= 1` and `0 <= v <= 1`.

@@ -8,7 +8,7 @@ import {
 } from './abUnion';
 
 const SQRT3 = Math.sqrt(3);
-const SAMPLE_STEPS = 120;
+const SAMPLE_STEPS = 240;
 const HIT_RADIUS_PX = 11;
 const EDGE_HIT_PX = 10;
 const VIEW_PAD = 54;
@@ -354,6 +354,10 @@ function distance(a: Point, b: Point): number {
 
 function pointInPolygon(point: AbHullDebugVertex, polygon: AbHullDebugVertex[]): boolean {
   if (polygon.length < 3) return false;
+  for (let i = 0; i < polygon.length; i++) {
+    if (pointOnPolygonEdge(point, polygon[i], polygon[(i + 1) % polygon.length])) return true;
+  }
+
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const a = polygon[i];
@@ -365,6 +369,20 @@ function pointInPolygon(point: AbHullDebugVertex, polygon: AbHullDebugVertex[]):
     }
   }
   return inside;
+}
+
+function pointOnPolygonEdge(point: AbHullDebugVertex, a: AbHullDebugVertex, b: AbHullDebugVertex): boolean {
+  const du = b.u - a.u;
+  const dv = b.v - a.v;
+  const edgeLength2 = du * du + dv * dv;
+  if (edgeLength2 < 1e-16) return sameDebugPoint(point, a);
+
+  const tolerance = 1e-7;
+  const cross = (point.u - a.u) * dv - (point.v - a.v) * du;
+  if (Math.abs(cross) / Math.sqrt(edgeLength2) > tolerance) return false;
+
+  const dot = (point.u - a.u) * du + (point.v - a.v) * dv;
+  return dot >= -tolerance && dot <= edgeLength2 + tolerance;
 }
 
 function sampleRegion(state: AbHullDebugState): DebugSample[] {
