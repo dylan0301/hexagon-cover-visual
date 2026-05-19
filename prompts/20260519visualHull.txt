@@ -1,0 +1,4 @@
+in ab union mode, add a checkbox for each hex axis hull and original ab union visual
+delete the show region checkbox.
+if both checkboxes are on, show both with different colors with original ab union upper
+ask me questions

@@ -2200,6 +2200,14 @@ function formatAbUnionValues(label: string, values: number[]): string {
   return `${label} = (${values.map((value) => value.toFixed(4)).join(', ')})`;
 }
 
+function abUnionOverlayLabel(): string {
+  const overlays = [
+    abUnionState.showOriginalRegion ? 'original' : null,
+    abUnionState.useAxisAlignedHull ? 'hex-axis hull' : null,
+  ].filter((label): label is string => label !== null);
+  return overlays.join(' + ') || 'none';
+}
+
 function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const thetaDeg = abUnionState.theta * 180 / Math.PI;
   const lastOptimized = abUnionState.lastOptimized
@@ -2285,11 +2293,11 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span class="free-small-status">${escapeHtml(fMarkText)}</span>
     </div>
     <div class="ab-union-toolbar">
-      <label><input type="checkbox" data-ab-show-region${abUnionState.showRegion ? ' checked' : ''}/>show region</label>
+      <label><input type="checkbox" data-ab-show-original${abUnionState.showOriginalRegion ? ' checked' : ''}/>original AB union</label>
+      <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
-      <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
       <label>center
         <select data-ab-center-mode>
@@ -2333,7 +2341,8 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>red pair search</span><strong class="${farPairClass}">${escapeHtml(farPairText)}</strong>
       <span>f marks</span><strong>${escapeHtml(fMarkText)}</strong>
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
-      <span>region model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
+      <span>compute model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
+      <span>visible overlays</span><strong>${escapeHtml(abUnionOverlayLabel())}</strong>
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
@@ -2550,7 +2559,7 @@ function render(): void {
     const abResult = renderAbUnion(ctx, abUnionState, triangleState, manualLocalCs);
 
     gammaValues.textContent = `${formatAbUnionValues('a', abUnionAValues(abUnionState))}; ${formatAbUnionValues('b', abUnionBValues(abUnionState))}`;
-    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}, region = ${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}`;
+    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}, compute = ${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}`;
     localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min equality gap = ${abResult.minEqualityGap.toExponential(3)}`;
     ceStatus.textContent = 'ab union: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
@@ -2562,7 +2571,7 @@ function render(): void {
     ceChainStatus.style.color = abUnionState.centerMode === 'none'
       ? '#64748b'
       : abResult.centerContains ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = abUnionState.showRegion ? 'union region visible' : 'union region hidden';
+    coverOverlayStatus.textContent = `ab union overlays: ${abUnionOverlayLabel()}`;
     coverOverlayStatus.style.color = '#475569';
     renderAbUnionPanel(abResult);
     syncControllerSnapshot();
@@ -3202,8 +3211,8 @@ abUnionControls.addEventListener('input', (event) => {
 
 abUnionControls.addEventListener('change', (event) => {
   const target = event.target;
-  if (target instanceof HTMLInputElement && target.dataset.abShowRegion !== undefined) {
-    abUnionState.showRegion = target.checked;
+  if (target instanceof HTMLInputElement && target.dataset.abShowOriginal !== undefined) {
+    abUnionState.showOriginalRegion = target.checked;
     render();
     return;
   }

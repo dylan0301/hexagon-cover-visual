@@ -31,6 +31,7 @@ const CLICK_CANCEL_PX = 6;
 const PEN_HIT_SCALE = 1.35;
 const TOUCH_HIT_SCALE = 1.75;
 const COVER_RGBA = [157, 219, 198, 150] as const;
+const HULL_RGBA = [96, 165, 250, 120] as const;
 const UNCOVERED_RGBA = [220, 38, 38, 145] as const;
 const BOUNDARY_COLORS = ['#344e86', '#8a3ffc', '#0f766e', '#b45309', '#be123c', '#475569'];
 const HEX_AXIS_HULL_STEPS = 3;
@@ -98,7 +99,7 @@ export interface AbUnionState {
   centerMode: AbUnionCenterMode;
   centerLocked: boolean;
   quality: AbUnionQuality;
-  showRegion: boolean;
+  showOriginalRegion: boolean;
   showThetaTriangle: boolean;
   showFarPair: boolean;
   clipToCornerSectors: boolean;
@@ -728,6 +729,17 @@ function pointInHexAxisHull(u: number, v: number, hull: HexAxisHull): boolean {
   );
 }
 
+function hasVisibleRegionBits(state: AbUnionState, bits: number): boolean {
+  return state.regionVisible.some((visible, index) => visible && (bits & (1 << index)) !== 0);
+}
+
+function writePixel(data: Uint8ClampedArray, q: number, rgba: readonly [number, number, number, number]): void {
+  data[q] = rgba[0];
+  data[q + 1] = rgba[1];
+  data[q + 2] = rgba[2];
+  data[q + 3] = rgba[3];
+}
+
 function buildMask(cache: MaskCache, state: AbUnionState): number {
   const data = cache.overlay.data;
   data.fill(0);
@@ -737,34 +749,35 @@ function buildMask(cache: MaskCache, state: AbUnionState): number {
   let uncoveredCount = 0;
 
   for (let k = 0; k < cache.pixelIndex.length; k++) {
-    let bits = 0;
+    let exactBits = 0;
+    let modelBits = 0;
     for (let i = 0; i < 6; i++) {
       const u = cache.localU[i][k];
       const v = cache.localV[i][k];
       const hull = hexAxisHulls[i];
-      if (hull ? pointInHexAxisHull(u, v, hull) : containsExactRegionLocal(state, u, v, out[i], inc[i])) {
-        bits |= 1 << i;
+      const needsExact = state.showOriginalRegion || !state.useAxisAlignedHull || hull === null;
+      const inExact = needsExact && containsExactRegionLocal(state, u, v, out[i], inc[i]);
+      if (inExact) exactBits |= 1 << i;
+      if (state.useAxisAlignedHull) {
+        if (hull ? pointInHexAxisHull(u, v, hull) : inExact) {
+          modelBits |= 1 << i;
+        }
+      } else if (inExact) {
+        modelBits |= 1 << i;
       }
     }
-    cache.maskBits[k] = bits;
+    cache.maskBits[k] = modelBits;
 
     const q = cache.pixelIndex[k] * 4;
-    if (bits) {
-      const hasVisibleRegion = state.regionVisible.some((visible, index) =>
-        visible && (bits & (1 << index)) !== 0,
-      );
-      if (state.showRegion && hasVisibleRegion) {
-        data[q] = COVER_RGBA[0];
-        data[q + 1] = COVER_RGBA[1];
-        data[q + 2] = COVER_RGBA[2];
-        data[q + 3] = COVER_RGBA[3];
-      }
-    } else {
+    if (!modelBits) {
       uncoveredCount++;
-      data[q] = UNCOVERED_RGBA[0];
-      data[q + 1] = UNCOVERED_RGBA[1];
-      data[q + 2] = UNCOVERED_RGBA[2];
-      data[q + 3] = UNCOVERED_RGBA[3];
+      writePixel(data, q, UNCOVERED_RGBA);
+    }
+    if (state.useAxisAlignedHull && hasVisibleRegionBits(state, modelBits)) {
+      writePixel(data, q, HULL_RGBA);
+    }
+    if (state.showOriginalRegion && hasVisibleRegionBits(state, exactBits)) {
+      writePixel(data, q, COVER_RGBA);
     }
   }
 
@@ -1816,7 +1829,13 @@ function normalizeCoincidenceLocks(value: unknown, labels: AbUnionLabel[]): AbUn
 }
 
 function normalizeAbUnionState(state: AbUnionState): void {
-  const legacy = state as unknown as { b?: number[]; edgeDots?: AbUnionEdgeDots[]; tool?: AbUnionTool };
+  const legacy = state as unknown as {
+    b?: number[];
+    edgeDots?: AbUnionEdgeDots[];
+    tool?: AbUnionTool;
+    showOriginalRegion?: boolean;
+    showRegion?: boolean;
+  };
   const source = Array.isArray(legacy.edgeDots)
     ? legacy.edgeDots
     : Array.from({ length: 6 }, (_, index) => defaultEdgeDots(legacy.b?.[index] ?? 0.25));
@@ -1839,6 +1858,7 @@ function normalizeAbUnionState(state: AbUnionState): void {
     ? legacy.tool
     : 'move';
   state.centerLocked = Boolean(state.centerLocked);
+  state.showOriginalRegion = legacy.showOriginalRegion ?? legacy.showRegion ?? true;
   state.useAxisAlignedHull = Boolean(state.useAxisAlignedHull);
   state.regionVisible = Array.from({ length: 6 }, (_, index) => state.regionVisible?.[index] ?? true);
   state.aLocked = normalizeLockArray(state.aLocked);
@@ -2396,7 +2416,7 @@ export function createDefaultAbUnionState(): AbUnionState {
     centerMode: 'none',
     centerLocked: false,
     quality: 'adaptive',
-    showRegion: true,
+    showOriginalRegion: true,
     showThetaTriangle: true,
     showFarPair: true,
     clipToCornerSectors: false,
@@ -2450,7 +2470,7 @@ function evaluateState(
   tempState.edgeDots = state.edgeDots.map((edge) => ({ ...edge }));
   tempState.clipToCornerSectors = state.clipToCornerSectors;
   tempState.useAxisAlignedHull = state.useAxisAlignedHull;
-  tempState.showRegion = false;
+  tempState.showOriginalRegion = false;
   buildMask(cache, tempState);
 
   let best: AbUnionOptimization = { theta: 0, L: Number.POSITIVE_INFINITY };
