@@ -66,3 +66,12 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - Close the polygon to check whether it contains all sampled exact-region points. Missed samples are highlighted in red, and the vertex list is shown for copying.
 - `export current` appends the current `a`, `b`, polygon vertices, and sampled coverage data to the experiment JSON. Repeated exports stay in the same JSON block until `clear exports`.
 - This mode is exploratory only; it does not change the normal `ab union` mask or hull algorithm.
+
+## `0521 conj` mode
+
+`0521 conj` is a diagnostic AB-union slice for the May 21 conjecture reduction.
+
+- The mode uses one draggable point `X_i` per edge and enforces `a1+b1=a3+b3=a5+b5=1`, `a4+b4>1`, `a0+b0<=1`, and `a2+b2<=1`.
+- The canvas reuses the AB-union overlay, then draws the two full radius-1 circles centered at `X2` and `X5`.
+- It marks two numerical intersections between the `R4` boundary and those circle boundaries, plus the `V0` and `V2` max-c points on `OV0` and `OV2`.
+- It fits and draws the smallest enclosing equilateral triangle for the four marked points and reports its side length in the right panel.

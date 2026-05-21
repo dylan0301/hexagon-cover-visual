@@ -135,6 +135,11 @@ import {
   undoAbHullDebugVertex,
   type AbHullDebugResult,
 } from './abHullDebug';
+import {
+  createDefaultConj0521State,
+  renderConj0521,
+  type Conj0521RenderResult,
+} from './conj0521';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -222,6 +227,7 @@ let currentCSample: CSample | RejectedSample | null = null;
 let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
+let conj0521State = createDefaultConj0521State();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 
 interface ControllerSnapshot {
@@ -681,7 +687,8 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'circle' ||
     value === 'free' ||
     value === 'ab-union' ||
-    value === 'ab-hull-debug';
+    value === 'ab-hull-debug' ||
+    value === 'conj-0521';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -2412,6 +2419,50 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
   `;
 }
 
+function renderConj0521Panel(result: Conj0521RenderResult): void {
+  const rowHtml = result.rows.map((row) => `
+    <tr>
+      <td>R${row.index}</td>
+      <td>${row.a.toFixed(4)}</td>
+      <td>${row.b.toFixed(4)}</td>
+      <td>${row.sum.toFixed(4)}</td>
+      <td>${escapeHtml(row.constraint)}</td>
+      <td><span class="ab-union-pill ${row.ok ? 'is-good' : 'is-warn'}">${row.ok ? 'ok' : 'check'}</span></td>
+    </tr>
+  `).join('');
+  const pointHtml = result.points.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.id)}</td>
+      <td>${escapeHtml(item.label)}</td>
+      <td>${item.point ? item.point.x.toFixed(5) : 'missing'}</td>
+      <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
+    </tr>
+  `).join('');
+  const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
+  const sideClass = result.triangle && result.triangle.side <= 1
+    ? 'ab-union-ok'
+    : result.triangle ? 'ab-union-bad' : '';
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-readout">
+      <span>4-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
+      <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
+      <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
+      <span>status</span><strong>${escapeHtml(result.status)}</strong>
+    </div>
+    <div class="ab-union-section-title">0521 constraints</div>
+    <table class="ab-union-table">
+      <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
+      <tbody>${rowHtml}</tbody>
+    </table>
+    <div class="ab-union-section-title">four points</div>
+    <table class="ab-union-table">
+      <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
+      <tbody>${pointHtml}</tbody>
+    </table>
+  `;
+}
+
 function toggleSelectedHalfDiagonal(index: number): void {
   const existingIndex = selectedHalfDiagonalIndices.indexOf(index);
   if (existingIndex >= 0) {
@@ -2423,12 +2474,18 @@ function toggleSelectedHalfDiagonal(index: number): void {
 }
 
 function isCoverOverlayAvailable(): boolean {
-  return shapeMode !== 'free' && shapeMode !== 'ab-union' && shapeMode !== 'ab-hull-debug';
+  return shapeMode !== 'free' &&
+    shapeMode !== 'ab-union' &&
+    shapeMode !== 'ab-hull-debug' &&
+    shapeMode !== 'conj-0521';
 }
 
 function syncPointToolControls(): void {
   normalizeSelectedPointSeed();
-  const visible = shapeMode !== 'free' && shapeMode !== 'ab-union' && shapeMode !== 'ab-hull-debug';
+  const visible = shapeMode !== 'free' &&
+    shapeMode !== 'ab-union' &&
+    shapeMode !== 'ab-hull-debug' &&
+    shapeMode !== 'conj-0521';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -2447,6 +2504,8 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'ab union';
   } else if (shapeMode === 'ab-hull-debug') {
     shapeTitle.textContent = 'AB hull debug';
+  } else if (shapeMode === 'conj-0521') {
+    shapeTitle.textContent = '0521 conj';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -2459,12 +2518,15 @@ function syncModeButtons(): void {
   const freeActive = shapeMode === 'free';
   const abUnionActive = shapeMode === 'ab-union';
   const abHullDebugActive = shapeMode === 'ab-hull-debug';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive;
+  const conj0521Active = shapeMode === 'conj-0521';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive;
-  abUnionPanelTitle.textContent = abHullDebugActive ? 'AB hull debug' : 'ab union region';
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !conj0521Active;
+  abUnionPanelTitle.textContent = abHullDebugActive
+    ? 'AB hull debug'
+    : conj0521Active ? '0521 conj' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -2598,6 +2660,30 @@ function render(): void {
     coverOverlayStatus.style.color = '#64748b';
     regionRenderer.render();
     renderAbHullDebugPanel(result);
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'conj-0521') {
+    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    const result = renderConj0521(ctx, conj0521State, triangleState, manualLocalCs);
+
+    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
+    localCBounds.textContent = `0521 slice: a1+b1=a3+b3=a5+b5=1, a4+b4>1`;
+    localCValues.textContent = result.triangle
+      ? `4-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `4-point side unavailable: ${result.status}`;
+    ceStatus.textContent = '0521 conj: CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
+    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
+    coverOverlayStatus.style.color = '#475569';
+    regionRenderer.render();
+    renderConj0521Panel(result);
     syncControllerSnapshot();
     return;
   }
@@ -3367,6 +3453,18 @@ setupAbHullDebugInteraction(
   canvas,
   () => shapeMode === 'ab-hull-debug',
   () => abHullDebugState,
+  render,
+);
+
+setupAbUnionInteraction(
+  canvas,
+  () => shapeMode === 'conj-0521',
+  () => conj0521State,
+  triangleState,
+  () => manualLocalCs,
+  (index, value) => {
+    manualLocalCs[index] = clampToLocalCMax(value, 1);
+  },
   render,
 );
 
