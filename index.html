@@ -26,6 +26,12 @@
           <button type="button" class="shape-button" data-shape-mode="ab-union">
             ab union
           </button>
+          <button type="button" class="shape-button" data-shape-mode="ab-hull-debug">
+            Hull debug
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="conj-0521">
+            0521 conj
+          </button>
         </div>
         <div id="strict-check-panel">
           <label id="strict-check-toggle-row" for="strict-check-toggle">
@@ -71,6 +77,15 @@
             <span>Show V<sub>i</sub> triangles</span>
           </label>
           <div class="readout" id="cover-overlay-status">cover overlay off</div>
+        </div>
+        <div id="point-tool-panel">
+          <div class="free-toolbar">
+            <span>point</span>
+            <button type="button" class="free-button" id="point-tool-toggle">point</button>
+            <button type="button" class="free-button" id="point-delete">delete</button>
+            <button type="button" class="free-button" id="point-clear">clear</button>
+            <span class="free-small-status" id="point-tool-status">0 seeds</span>
+          </div>
         </div>
         <div id="ce-panel">
           <div class="readout" id="ce-status">CE: not detected</div>
@@ -158,7 +173,7 @@
           </details>
         </div>
         <div id="ab-union-panel" hidden>
-          <div class="panel-title">ab union region</div>
+          <div class="panel-title" id="ab-union-panel-title">ab union region</div>
           <div id="ab-union-controls"></div>
         </div>
         <div id="slider-row" hidden>

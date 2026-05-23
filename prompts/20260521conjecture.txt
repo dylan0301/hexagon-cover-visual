@@ -1,0 +1,64 @@
+가정: a+b>1 V triangle이 정확히 1개 있어야 함을 증명한 상태
+V_4 triangle이 a+b>1 삼각형이라고 할때
+CE0일떄
+저희가 각각 ab union set을 찾기 위해 육각형 한 변당 점을 하나씩 찍잖아요
+b_i+a_i+1 = 1 constraint로 연결되어 있는데
+이 때
+결론: a_1 + b_1 = 1
+a_3 + b_3 = 1
+a_5 + b_5 = 1
+케이스만 증명하는 것으로 reduce 가능하다
+a_1+b_1= 1 이것도 reduce 할수있는지는 아직 긴가민가 하긴 한데
+
+어떤 식으로 하는지 보여드릴게요
+
+pf)
+V_0, V_1, V_2, V_4에 대해서는 저희가 쓰던 ab union set 그대로 쓸거에요
+V_3, V_5에 대해서 ab union set보다 조금 더 큰 set을 쓸건데
+V_i 와 V_i+1 사이에 찍은 점을 X_i라고 할게요
+그럼 V_3에 대해서는 ab union set 대신에
+일단 X_2 기준으로 반지름 1 원을 그려볼거에요
+V_3 V_4 위에서 시작해서 호를 그리는데 끝까지 그리는건 아니고 OV_4 대각선과 만날때까지만 그릴거에요
+그리고 그 부채꼴과 V_3의 원래 ab union set을 union 한 모양을 쓸거에요
+V_5 에 대해서도 ab union set 대신에 X_5 기준으로 반지름 1 부채꼴 해서 ab union set과 union 해요
+그다음에 이전에 했던거처럼 점 4개 찍는 전략을 쓸건데
+그 중 2개의 점은 어떤걸로 찍을거냐면
+V_4의 ab union set curve와 방금전에 만든 두 부채꼴과의 intersection point 2개에요 
+다른 X_i들을 모두다 fix 해놓고 X_4만 움직여 볼게요
+X_4가 왼쪽으로 가면 V_4의 ab union curve가 V_4로부터 멀어지고 
+X_4가 오른쪽으로 가면 V_4의 ab union curve가 V_4에 가까워져요
+이 curve의 중요한 부분이 두개의 line segment로 이루어진거같아서
+멀어지고 가까워진다는걸 엄밀하게 정의해야 하긴 하겠지만 일단 느낌은 그래요
+그러면 저희가 4개 점 찍는거중에서 나머지 2개의 점은 지금 찍은 점 2개의 반대쪽에 찍을거라서
+V_4의 ab union curve가 V_4로부터 멀어져야 
+점 4개를 포함하는 정삼각형의 길이가 작아져요
+monotone 할거같아요
+X_3 움직이는거도 마찬가지라서
+X_3, X_4를 최대한 V_4에 가깝게 해야 
+점 4개를 포함하는 정삼각형의 길이가 최소가 될거같아요
+그래서 X_3, X_4가 V_4에 최대한 가까우면 a_3+b_3=1, a_5+b_5=1이 되어요
+점 위치가 그렇다는 얘기에요
+그리고 나머지 2개의 점을 어디다가 찍을거냐면
+OV_2 대각선 위의 V_2 max gamma 점 
+OV_0 대각선 위의 V_0 max gamma 점
+이렇게 2개 찍을거에요
+V_1 은 기여하는게 없어서
+X_1을 V_2쪽으로 떙기고
+X_0를 V_0쪽으로 떙기고
+그러면 a_1+b_1=1인거중에만 minimum 정삼각형 후보가 나올거에요
+
+
+look at this. add a 0521conj mode next to hull debug mode.
+it shows the 부채꼴 and the 4 points,
+and find smallest triangle that contains those 4 points
+we still move the 6 X_i's, but with the constriant above
+a_4+b_4 > 1
+a_1+b_1=a_3+b_3=a_5+b_5=1
+a_2+b_2<=1, a_0+b_0 <= 1
+use existing functions as much as you can, especially from ab union mode since it is almost same
+ask me questions
+
+
+don't clip the 부채꼴 at hexagon diagonal, just draw a circle and use it for X2 and X5
+
+the points of intersection must be on the boundary curve of ab union set of V_4, not on edges of hexagons

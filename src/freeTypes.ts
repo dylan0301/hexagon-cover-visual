@@ -1,8 +1,9 @@
 import type { Point } from './types';
+import type { SymmetricPointSeed } from './symmetricPoints';
 
 export type FreeTriangleId = 'C' | 'V0' | 'V1' | 'V2' | 'V3' | 'V4' | 'V5';
 export type FreeTarget = 'S_HALF' | 'S_T' | 'S' | 'BENZENE' | 'LOTUS';
-export type FreeTool = 'move' | 'd-mark' | 's-mark' | 'sample';
+export type FreeTool = 'move' | 'd-mark' | 's-mark' | 'sample' | 'point';
 export type FreeVd0Mode = 'max-c' | 'max-a' | 'max-b';
 export type FreeVd0Coordinate = 'a' | 'b' | 'c';
 export type NamedPointKind = 'O' | 'M' | 'P' | 'B' | 'V' | 'label' | 'manual';
@@ -62,6 +63,8 @@ export interface FreeState {
   triangles: FreeTriangleState[];
   labels: FreeLabel[];
   selectedSegments: FreeSegmentRef[];
+  pointSeeds: SymmetricPointSeed[];
+  selectedPointSeedId: string | null;
   status: string;
   sampling?: import('./halfSkeletonFrontier').SamplingStore;
 }

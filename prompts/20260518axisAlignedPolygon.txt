@@ -1,0 +1,46 @@
+look at abUnion sets. when a+b<=1, 
+look at the boundary of abUnion set
+they naturally seem to have separate parts piecewise smooth naturally 
+i want to make an axis aligned hull of them
+but there are infinitely many axis aligend hull that contains the abUnion set, but don't use too much piecewises, 
+select the msot natural one
+in the ab union mode, make a checkbox if toggled, show the axis aligned hull instead and compute the uncovered region with them.
+everything else such as finding two points and purple triangle works exactly the same.
+axis aligned hull means a polygon with axis aligned edges that contains the ab Union set and it is smallest
+but it is not actually the smallest, because if smallest, it will use too much edges. 
+make your own and let me see
+ask me questions
+
+by axis aligned, i mean the edges are parallel to the hexagon edges. 0 deg, 60 deg, 120 deg, 180 deg, 240 deg, 300 deg
+use 9 edges at most
+
+when a+b<1, look at the intersection of abunion buondary curve and hexagon edges. 
+there are 2 intersectino points. draw axis aligned edge starting from those, and make the current axis aligned polygon smaller.
+ask me questinino
+
+for example, for V_4 triangle,
+starting from edgeV3V4 and edgeV4V5,
+draw lines of slope sqrt3,
+then meet with other axis aligned lines,
+then we have shrinked the hull
+
+but i want smaller ab union set.
+make a debugging session where you give a ab union set example and i draw my wannabe axis aligned polygon hull.
+then you understand my thought more. my drawing will not be perfect so ask me again
+
+make the drawing session interactable in the website. make a separate interactive mode
+
+make an export button for the current a,b, and the current polygon.
+then we make a json file 
+if another export, then in the same json file.
+so that i can copy all my experimetns and tell you
+
+make a button that brings current code's suggested hull so that i can locally change from it
+
+make it able to add dots, then automatically make it so that it is axis aligend.
+make it able to delete dots, move dots.
+
+
+not finished yet:
+ look at 20260518axisAlignedExperiment.json. especially look at cases where a+b is near 1. these are cases i want to more reduce the current axis aligned hull
+ tell me what you understood

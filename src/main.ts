@@ -19,18 +19,28 @@ import {
   drawShape,
   getCPerimeterIntersections,
   getInnerGammas,
+  CIRCUMRADIUS,
   type CPerimeterIntersections,
   type PerimeterIntersectionInterval,
 } from './triangle';
 import { setupInteraction } from './interaction';
 import { createRegionRenderer, type GraphMode } from './region';
 import {
+  buildCentralCoverTriangle,
   computeCoverResult,
   type CoverChainDirection,
   type CoverResult,
   type CoverSegmentReport,
   type CoverTriangle,
 } from './cover';
+import {
+  buildSymmetricPointTargets,
+  nextPointSeedId,
+  pointInHexagon,
+  sanitizePointSeeds,
+  type SymmetricPointSeed,
+  type SymmetricPointTarget,
+} from './symmetricPoints';
 import {
   allowedMidpointIndices,
   autoPlaceAllFreeVd0Triangles,
@@ -86,18 +96,50 @@ import {
   type VSample,
 } from './halfSkeletonFrontier';
 import {
+  abUnionCoincidenceTargets,
+  abUnionAValues,
+  abUnionBValues,
+  clearAbUnionFMarks,
   createDefaultAbUnionState,
+  deleteAbUnionLabel,
+  deleteSelectedAbUnionFMark,
   optimizeAbUnionTheta,
   renderAbUnion,
-  runAbUnionRandomSearch,
+  setAbUnionCoincidenceLock,
+  setAbUnionFixedSum,
+  setAbUnionLock,
   setAbUnionPreset,
-  setAbUnionEqualityLock,
+  setAbUnionTool,
+  snapAbUnionLabelToEdge,
   setupAbUnionInteraction,
   type AbUnionCenterMode,
+  type AbUnionCoincidenceRole,
   type AbUnionPreset,
   type AbUnionQuality,
   type AbUnionRenderResult,
+  type AbUnionTool,
 } from './abUnion';
+import {
+  clearAbHullDebugPolygon,
+  clearAbHullDebugExports,
+  closeAbHullDebugPolygon,
+  createDefaultAbHullDebugState,
+  deleteSelectedAbHullDebugVertex,
+  exportAbHullDebugExperiment,
+  formatAbHullDebugExports,
+  loadSuggestedAbHullDebugPolygon,
+  renderAbHullDebug,
+  resetAbHullDebugExample,
+  setAbHullDebugParameter,
+  setupAbHullDebugInteraction,
+  undoAbHullDebugVertex,
+  type AbHullDebugResult,
+} from './abHullDebug';
+import {
+  createDefaultConj0521State,
+  renderConj0521,
+  type Conj0521RenderResult,
+} from './conj0521';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -132,6 +174,11 @@ const strictEpsMaxInput = document.getElementById('strict-eps-max-input') as HTM
 const coverOverlayToggle = document.getElementById('cover-overlay-toggle') as HTMLInputElement;
 const coverOverlayToggleRow = document.getElementById('cover-overlay-toggle-row') as HTMLLabelElement;
 const coverOverlayStatus = document.getElementById('cover-overlay-status') as HTMLDivElement;
+const pointToolPanel = document.getElementById('point-tool-panel') as HTMLDivElement;
+const pointToolToggle = document.getElementById('point-tool-toggle') as HTMLButtonElement;
+const pointDeleteButton = document.getElementById('point-delete') as HTMLButtonElement;
+const pointClearButton = document.getElementById('point-clear') as HTMLButtonElement;
+const pointToolStatus = document.getElementById('point-tool-status') as HTMLSpanElement;
 const ceStatus = document.getElementById('ce-status') as HTMLDivElement;
 const ceControls = document.getElementById('ce-controls') as HTMLDivElement;
 const ceIntervalSelect = document.getElementById('ce-interval-select') as HTMLSelectElement;
@@ -146,6 +193,7 @@ const freeStateStatus = document.getElementById('free-state-status') as HTMLDivE
 const freeStateCopyButton = document.getElementById('free-state-copy') as HTMLButtonElement;
 const freeStateLoadButton = document.getElementById('free-state-load') as HTMLButtonElement;
 const abUnionPanel = document.getElementById('ab-union-panel') as HTMLDivElement;
+const abUnionPanelTitle = document.getElementById('ab-union-panel-title') as HTMLDivElement;
 const abUnionControls = document.getElementById('ab-union-controls') as HTMLDivElement;
 
 const triangleState: TriangleState = {
@@ -164,6 +212,7 @@ let hoveredHalfDiagonalIndex: number | null = null;
 let selectedHalfDiagonalIndices: number[] = [];
 let strictEpsUpperBound = DEFAULT_STRICT_EPS_UPPER_BOUND;
 let showCoverOverlay = false;
+let pointToolActive = false;
 let ceDirection: CoverChainDirection = 'ccw';
 let ce2SelectedIntervalIndex = 0;
 let ceStartOverrides: Record<string, number> = {};
@@ -177,9 +226,12 @@ let currentV0Sample: VSample | RejectedSample | null = null;
 let currentCSample: CSample | RejectedSample | null = null;
 let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
+let abHullDebugState = createDefaultAbHullDebugState();
+let conj0521State = createDefaultConj0521State();
+let currentAbHullDebugResult: AbHullDebugResult | null = null;
 
 interface ControllerSnapshot {
-  version: 3;
+  version: 4;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -195,9 +247,14 @@ interface ControllerSnapshot {
   ceDirection: CoverChainDirection;
   ce2SelectedIntervalIndex: number;
   ceStartOverrides: Record<string, number>;
+  pointSeeds: SymmetricPointSeed[];
+  selectedPointSeedId: string | null;
 }
 
-type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version'> & { version?: 1 | 2 | 3 };
+type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds'> & {
+  version?: 1 | 2 | 3 | 4;
+  pointSeeds?: unknown;
+};
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
   const rect = target.getBoundingClientRect();
@@ -234,6 +291,70 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function normalizeSelectedPointSeed(): void {
+  if (
+    freeState.selectedPointSeedId &&
+    !freeState.pointSeeds.some((seed) => seed.id === freeState.selectedPointSeedId)
+  ) {
+    freeState.selectedPointSeedId = null;
+  }
+}
+
+function pointSeedStatusText(): string {
+  normalizeSelectedPointSeed();
+  const seedCount = freeState.pointSeeds.length;
+  const pointCount = buildSymmetricPointTargets(freeState.pointSeeds).length;
+  const selected = freeState.selectedPointSeedId ? `; selected ${freeState.selectedPointSeedId}` : '';
+  return `${seedCount} seed${seedCount === 1 ? '' : 's'}, ${pointCount} D6 point${pointCount === 1 ? '' : 's'}${selected}`;
+}
+
+function addPointSeed(point: Point): void {
+  if (!pointInHexagon(point)) {
+    return;
+  }
+  const id = nextPointSeedId(freeState.pointSeeds);
+  freeState.pointSeeds.push({ id, point });
+  freeState.selectedPointSeedId = id;
+  freeState.status = `Created point seed ${id}.`;
+}
+
+function movePointSeed(seedId: string, point: Point): void {
+  if (!pointInHexagon(point)) {
+    return;
+  }
+  const seed = freeState.pointSeeds.find((candidate) => candidate.id === seedId);
+  if (!seed) {
+    return;
+  }
+  seed.point = point;
+  freeState.selectedPointSeedId = seedId;
+}
+
+function selectPointSeed(seedId: string): void {
+  if (freeState.pointSeeds.some((seed) => seed.id === seedId)) {
+    freeState.selectedPointSeedId = seedId;
+  }
+}
+
+function deleteSelectedPointSeed(): void {
+  const selected = freeState.selectedPointSeedId;
+  if (!selected) {
+    return;
+  }
+  freeState.pointSeeds = freeState.pointSeeds.filter((seed) => seed.id !== selected);
+  freeState.selectedPointSeedId = null;
+  freeState.status = `Deleted point seed ${selected}.`;
+}
+
+function clearPointSeeds(): void {
+  if (freeState.pointSeeds.length === 0) {
+    return;
+  }
+  freeState.pointSeeds = [];
+  freeState.selectedPointSeedId = null;
+  freeState.status = 'Cleared point seeds.';
+}
+
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
   const point = mathToCanvas({ x, y });
   ctx2d.beginPath();
@@ -245,6 +366,67 @@ function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill:
     ctx2d.lineWidth = 2;
     ctx2d.stroke();
   }
+}
+
+function drawSymmetricPoints(ctx2d: CanvasRenderingContext2D, failureLabels: Set<string>): void {
+  const targets = buildSymmetricPointTargets(freeState.pointSeeds);
+  if (targets.length === 0) {
+    return;
+  }
+
+  ctx2d.save();
+  for (const target of targets) {
+    const point = mathToCanvas(target.point);
+    ctx2d.beginPath();
+    ctx2d.arc(point.x, point.y, 4.5, 0, 2 * Math.PI);
+    ctx2d.fillStyle = failureLabels.has(target.label) ? '#dc2626' : '#2563eb';
+    ctx2d.fill();
+    ctx2d.strokeStyle = '#ffffff';
+    ctx2d.lineWidth = 1.5;
+    ctx2d.stroke();
+  }
+
+  for (const seed of freeState.pointSeeds) {
+    const point = mathToCanvas(seed.point);
+    ctx2d.beginPath();
+    ctx2d.arc(point.x, point.y, 8, 0, 2 * Math.PI);
+    ctx2d.strokeStyle = seed.id === freeState.selectedPointSeedId ? '#f59e0b' : '#0f172a';
+    ctx2d.lineWidth = seed.id === freeState.selectedPointSeedId ? 2.5 : 1.5;
+    ctx2d.stroke();
+  }
+  ctx2d.restore();
+}
+
+interface PointCoverageResult {
+  targets: SymmetricPointTarget[];
+  failures: string[];
+}
+
+function pointInCoverTriangle(point: Point, triangle: CoverTriangle): boolean {
+  return triangle.normals.every((normal, index) =>
+    normal.x * point.x + normal.y * point.y <= triangle.lambdas[index] + 1e-9,
+  );
+}
+
+function pointInCurrentCircle(point: Point): boolean {
+  return Math.hypot(point.x - triangleState.position.x, point.y - triangleState.position.y) <= CIRCUMRADIUS + 1e-9;
+}
+
+function computeNonFreePointCoverage(coverResult: CoverResult | null): PointCoverageResult {
+  const targets = buildSymmetricPointTargets(freeState.pointSeeds);
+  if (targets.length === 0) {
+    return { targets, failures: [] };
+  }
+  const cTriangle = shapeMode === 'triangle' ? buildCentralCoverTriangle(triangleState) : null;
+  const triangles = coverResult?.vTriangles ?? [];
+  const failures = targets.flatMap((target) => {
+    const coveredByCentral = cTriangle !== null
+      ? pointInCoverTriangle(target.point, cTriangle)
+      : shapeMode === 'circle' && pointInCurrentCircle(target.point);
+    const covered = coveredByCentral || triangles.some((triangle) => pointInCoverTriangle(target.point, triangle));
+    return covered ? [] : [target.label];
+  });
+  return { targets, failures };
 }
 
 function radialPoint(index: number, radius: number): { x: number; y: number } {
@@ -500,7 +682,13 @@ function isPoint(value: unknown): value is Point {
 }
 
 function isShapeMode(value: unknown): value is ShapeMode {
-  return value === 'triangle' || value === 'local-c' || value === 'circle' || value === 'free' || value === 'ab-union';
+  return value === 'triangle' ||
+    value === 'local-c' ||
+    value === 'circle' ||
+    value === 'free' ||
+    value === 'ab-union' ||
+    value === 'ab-hull-debug' ||
+    value === 'conj-0521';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -522,7 +710,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 3,
+    version: 4,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -542,6 +730,8 @@ function getControllerSnapshot(): ControllerSnapshot {
     ceDirection,
     ce2SelectedIntervalIndex,
     ceStartOverrides: sanitizeCeStartOverrides(ceStartOverrides),
+    pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
+    selectedPointSeedId: freeState.selectedPointSeedId,
   };
 }
 
@@ -553,7 +743,7 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) {
+  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) {
     throw new Error('Unsupported snapshot version.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
@@ -640,8 +830,14 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
   );
 
+  const pointSeeds = sanitizePointSeeds(parsed.pointSeeds);
+  const selectedPointSeedId = typeof parsed.selectedPointSeedId === 'string' &&
+    pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
+    ? parsed.selectedPointSeedId
+    : null;
+
   return {
-    version: 3,
+    version: 4,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -661,6 +857,8 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     ceDirection: parsed.ceDirection ?? 'ccw',
     ce2SelectedIntervalIndex: parsed.ce2SelectedIntervalIndex ?? 0,
     ceStartOverrides: sanitizeCeStartOverrides(parsed.ceStartOverrides),
+    pointSeeds,
+    selectedPointSeedId,
   };
 }
 
@@ -688,6 +886,8 @@ function loadControllerSnapshot(raw: string): void {
   ceDirection = snapshot.ceDirection;
   ce2SelectedIntervalIndex = snapshot.ce2SelectedIntervalIndex;
   ceStartOverrides = { ...snapshot.ceStartOverrides };
+  freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
+  freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -1029,19 +1229,27 @@ function resetCurrentCeStart(): void {
   render();
 }
 
-function summarizeCoverResult(result: CoverResult): string {
+function summarizeCoverResult(result: CoverResult, pointCoverage: PointCoverageResult): string {
   const gapSegments = result.segments
     .filter((segment) => segment.gaps.length > 0)
     .map((segment) => `${segment.kind} ${segment.index}`);
   const sizeText = result.tooLargeTriangles.length === 0
     ? 'perimeter sides < 1'
     : `perimeter side >= 1: ${result.tooLargeTriangles.join(', ')}`;
+  const pointText = pointCoverage.targets.length === 0
+    ? ''
+    : pointCoverage.failures.length === 0
+      ? `; D6 points PASS (${pointCoverage.targets.length})`
+      : `; D6 missing ${pointCoverage.failures.slice(0, 8).join(', ')}${pointCoverage.failures.length > 8 ? ', ...' : ''}`;
 
-  if (gapSegments.length === 0) {
-    return `cover: PASS; ${sizeText}`;
+  if (gapSegments.length === 0 && pointCoverage.failures.length === 0) {
+    return `cover: PASS; ${sizeText}${pointText}`;
   }
 
-  return `cover: gaps on ${gapSegments.slice(0, 6).join(', ')}${gapSegments.length > 6 ? ', ...' : ''}; ${sizeText}`;
+  const gapText = gapSegments.length > 0
+    ? `gaps on ${gapSegments.slice(0, 6).join(', ')}${gapSegments.length > 6 ? ', ...' : ''}`
+    : 'no segment gaps';
+  return `cover: ${gapText}; ${sizeText}${pointText}`;
 }
 
 function initializeFreeFromCurrentIfNeeded(): void {
@@ -1062,6 +1270,8 @@ function initializeFreeFromCurrentIfNeeded(): void {
   );
   const next = createDefaultFreeState();
   next.strictEps = getEffectiveStrictEps();
+  next.pointSeeds = freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
+  next.selectedPointSeedId = freeState.selectedPointSeedId;
   getTriangle(next, 'C').center = { ...triangleState.position };
   getTriangle(next, 'C').angle = triangleState.angle;
   for (const coverTriangle of result.vTriangles) {
@@ -1161,6 +1371,8 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
       ctx2d.fillText(`B${i}`, point.x + 7, point.y - 7);
     }
   }
+
+  drawSymmetricPoints(ctx2d, new Set(validation.pointFailures));
 
   for (const label of freeState.labels) {
     if (!label.point) {
@@ -1296,7 +1508,7 @@ function clampInteger(value: string | undefined, min: number, max: number): numb
 }
 
 function formatFreeSnapshot(): string {
-  return JSON.stringify({ ...freeState, version: 6 }, null, 2);
+  return JSON.stringify({ ...freeState, version: 7 }, null, 2);
 }
 
 type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
@@ -1304,6 +1516,7 @@ type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
   targetT?: number;
   targetTFixed?: boolean;
   targetTPoints?: unknown;
+  pointSeeds?: unknown;
 };
 
 function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
@@ -1323,7 +1536,11 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
 }
 
 function isFreeTool(value: unknown): value is FreeTool {
-  return value === 'move' || value === 'd-mark' || value === 's-mark' || value === 'sample';
+  return value === 'move' || value === 'd-mark' || value === 's-mark' || value === 'sample' || value === 'point';
+}
+
+function isAbUnionCoincidenceRole(value: unknown): value is AbUnionCoincidenceRole {
+  return value === 'shared' || value === 'left' || value === 'right';
 }
 
 function isFreeTarget(value: unknown): value is FreeTarget {
@@ -1439,7 +1656,7 @@ function normalizeTargetTRef(ref: FreeNamedPointRef | undefined): void {
 function loadFreeSnapshot(raw: string): void {
   const parsed = JSON.parse(raw) as RawFreeSnapshot;
   if (
-    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6) ||
+    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7) ||
     !Array.isArray(parsed.triangles) ||
     parsed.triangles.length !== 7
   ) {
@@ -1465,6 +1682,11 @@ function loadFreeSnapshot(raw: string): void {
     throw new Error('Invalid free snapshot labels.');
   }
   const defaults = createDefaultFreeState();
+  const pointSeeds = sanitizePointSeeds(parsed.pointSeeds);
+  const selectedPointSeedId = typeof parsed.selectedPointSeedId === 'string' &&
+    pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
+    ? parsed.selectedPointSeedId
+    : null;
   freeState = {
     ...defaults,
     ...parsed,
@@ -1484,7 +1706,9 @@ function loadFreeSnapshot(raw: string): void {
     })) as FreeState['triangles'],
     labels,
     selectedSegments: [],
-    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
+    pointSeeds,
+    selectedPointSeedId,
+    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 || parsed.version === 7 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
   } as FreeState;
   delete (freeState as RawFreeSnapshot).targetT;
   delete (freeState as RawFreeSnapshot).targetTFixed;
@@ -1567,6 +1791,9 @@ function setFreeTool(nextTool: FreeTool): void {
     freeState.status = 'D-mark mode: click two intersecting segments.';
   } else if (nextTool === 's-mark') {
     freeState.status = 'S-mark mode: click two intersecting segments.';
+  } else if (nextTool === 'point') {
+    freeState.selectedSegments = [];
+    freeState.status = 'Point mode: click inside the hexagon to add a seed; drag seed handles to move them.';
   } else {
     freeState.status = 'Move mode: drag selected triangles.';
   }
@@ -1879,9 +2106,16 @@ function renderFreePanel(validation: FreeValidationResult): void {
         </span>
       `).join('')}`
     : '';
-  const toolButtons = (['move', 'd-mark', 's-mark', 'sample'] as FreeTool[]).map((tool) =>
+  const toolButtons = (['move', 'd-mark', 's-mark', 'sample', 'point'] as FreeTool[]).map((tool) =>
     `<button type="button" class="free-button${freeState.tool === tool ? ' is-active' : ''}" data-free-tool="${tool}">${tool}</button>`,
   ).join('');
+  const pointControls = `
+    <div class="free-toolbar">
+      points
+      <button type="button" class="free-button" data-delete-point-seed${freeState.selectedPointSeedId ? '' : ' disabled'}>delete selected</button>
+      <button type="button" class="free-button" data-clear-point-seeds${freeState.pointSeeds.length > 0 ? '' : ' disabled'}>clear</button>
+      <span class="free-small-status">${escapeHtml(pointSeedStatusText())}</span>
+    </div>`;
   const statuses = new Map(validation.constraintStatuses.map((status) => [status.triangleId, status]));
 
   const triangleRows = freeState.triangles.map((triangle) => {
@@ -1948,6 +2182,7 @@ function renderFreePanel(validation: FreeValidationResult): void {
   freeControls.innerHTML = `
     <div class="free-toolbar">target ${targetButtons}${targetTControls}</div>
     <div class="free-toolbar">tool ${toolButtons}</div>
+    ${pointControls}
     ${renderSamplingPanel()}
     <div class="free-row"><span>${freeState.status}</span></div>
     ${triangleRows}
@@ -1961,10 +2196,6 @@ function formatAbUnionDegrees(radians: number): string {
   return `${(radians * 180 / Math.PI).toFixed(1)} deg`;
 }
 
-function formatAbUnionB(values: number[]): string {
-  return `(${values.map((value) => value.toFixed(4)).join(', ')})`;
-}
-
 function abUnionCenterLabel(mode: AbUnionCenterMode): string {
   if (mode === 'none') return 'none';
   if (mode === 'circle') return 'circle';
@@ -1972,10 +2203,16 @@ function abUnionCenterLabel(mode: AbUnionCenterMode): string {
   return 'triangle';
 }
 
-function abUnionResultClass(value: string): string {
-  if (value === 'interesting') return 'is-good';
-  if (value === 'needs refinement') return 'is-warn';
-  return 'is-muted';
+function formatAbUnionValues(label: string, values: number[]): string {
+  return `${label} = (${values.map((value) => value.toFixed(4)).join(', ')})`;
+}
+
+function abUnionOverlayLabel(): string {
+  const overlays = [
+    abUnionState.showOriginalRegion ? 'original' : null,
+    abUnionState.useAxisAlignedHull ? 'hex-axis hull' : null,
+  ].filter((label): label is string => label !== null);
+  return overlays.join(' + ') || 'none';
 }
 
 function renderAbUnionPanel(result: AbUnionRenderResult): void {
@@ -1983,7 +2220,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const lastOptimized = abUnionState.lastOptimized
     ? `best L*=${abUnionState.lastOptimized.L.toFixed(5)} at ${formatAbUnionDegrees(abUnionState.lastOptimized.theta)}`
     : 'best L*: not optimized';
-  const equalityWarning = result.minSeparation < 1e-3
+  const equalityWarning = result.minEqualityGap < 1e-3
     ? '<div class="ab-union-warning">close to equality; apparent L &lt; 1 may be a near-degenerate artifact</div>'
     : '';
   const centerContainsText = abUnionState.centerMode === 'none'
@@ -2000,47 +2237,75 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
         ? `found d=${result.farPair.distance.toFixed(5)}`
         : `best d=${result.farPair.distance.toFixed(5)} <= 1`;
   const farPairClass = result.farPair?.exceedsUnit ? 'ab-union-bad' : '';
-  const equalityRowsHtml = result.equalityRows.map((row) => `
-    <tr class="${row.equality ? 'ab-union-equality-row' : ''}">
-      <td><input type="checkbox" title="include p${row.index} in the same-b group" data-ab-equality-lock="${row.index}"${row.locked ? ' checked' : ''}/></td>
-      <td>${row.index}</td>
-      <td>${row.previousB.toFixed(4)}</td>
-      <td>${row.currentB.toFixed(4)}</td>
-      <td>${row.sum.toFixed(4)}</td>
-      <td>${row.equality ? 'yes' : 'no'}</td>
-    </tr>
+  const fMarkText = result.fMarkCount === 0
+    ? 'none'
+    : result.fMarkDistance !== null
+      ? `distance=${result.fMarkDistance.toFixed(5)}`
+      : result.fMarkTriangleSide !== null
+        ? `side=${result.fMarkTriangleSide.toFixed(5)}`
+        : `${result.fMarkCount} dot${result.fMarkCount === 1 ? '' : 's'}`;
+  const toolLabels: Record<AbUnionTool, string> = {
+    move: 'Move',
+    add: 'Add',
+    delete: 'Delete',
+    'd-mark': 'd-mark',
+    's-mark': 's-mark',
+    'f-mark': 'f mark',
+  };
+  const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark', 'f-mark'] as AbUnionTool[]).map((tool) => `
+    <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
   const regionRowsHtml = result.regionRows.map((row) => `
-    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}">
+    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
       <td>R${row.index}</td>
+      <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
+      <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
+      <td><input type="checkbox" title="fix current a${row.index}+b${row.index}${row.fixedSum === null ? '' : ` = ${row.fixedSum.toFixed(4)}`}" data-ab-fixed-sum="${row.index}"${row.fixedSum !== null ? ' checked' : ''}/></td>
       <td>${row.a.toFixed(4)}</td>
       <td>${row.b.toFixed(4)}</td>
+      <td>${row.sum.toFixed(4)}</td>
       <td>${row.distance.toFixed(4)}</td>
+      <td>${row.equality ? 'yes' : 'no'}</td>
       <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
+    </tr>
+  `).join('');
+  const edgeRowsHtml = result.edgeRows.map((row) => `
+    <tr>
+      <td>e${row.index}</td>
+      <td>${row.split ? 'two' : 'one'}</td>
+      <td>${row.left.toFixed(4)}</td>
+      <td>${row.right.toFixed(4)}</td>
     </tr>
   `).join('');
   const regionVisibilityControls = Array.from({ length: 6 }, (_, index) => `
     <label><input type="checkbox" data-ab-region-visible="${index}"${abUnionState.regionVisible[index] ? ' checked' : ''}/>R${index}</label>
   `).join('');
-  const searchRows = abUnionState.searchResults.map((sample, index) => `
-    <tr>
-      <td>${index + 1}</td>
-      <td>${sample.L.toFixed(5)}</td>
-      <td>${formatAbUnionDegrees(sample.theta)}</td>
-      <td>${sample.minSeparation.toExponential(2)}</td>
-      <td><span class="ab-union-pill ${abUnionResultClass(sample.classification)}">${escapeHtml(sample.classification)}</span></td>
-    </tr>
-    <tr>
-      <td colspan="5" class="ab-union-b">${escapeHtml(formatAbUnionB(sample.b))}</td>
-    </tr>
-  `).join('');
+  const labelRows = abUnionState.labels.map((label) => {
+    const targets = abUnionCoincidenceTargets(abUnionState, label.id).map((target) => `
+      <button type="button" class="free-button" data-ab-snap-label="${escapeHtml(label.id)}" data-ab-snap-edge="${target.edge}" data-ab-snap-role="${target.role}"${label.point ? '' : ' disabled'}>snap ${escapeHtml(target.label)}</button>
+      <label><input type="checkbox" data-ab-coincidence-label="${escapeHtml(label.id)}" data-ab-coincidence-edge="${target.edge}" data-ab-coincidence-role="${target.role}"${target.locked ? ' checked' : ''}${label.point ? '' : ' disabled'}/>lock ${escapeHtml(target.label)}</label>
+    `).join('');
+    return `<div class="free-label-row">${escapeHtml(label.name)}: ${label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} ${targets}<button type="button" class="free-button" data-ab-delete-label="${escapeHtml(label.id)}">delete</button></div>`;
+  }).join('');
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
-      <label><input type="checkbox" data-ab-show-region${abUnionState.showRegion ? ' checked' : ''}/>show region</label>
+      <span>tool</span>
+      ${toolControls}
+    </div>
+    <div class="ab-union-toolbar">
+      <span>f marks</span>
+      <button type="button" class="free-button" data-ab-fmark-delete${abUnionState.selectedFMarkId ? '' : ' disabled'}>delete selected</button>
+      <button type="button" class="free-button" data-ab-fmark-clear${result.fMarkCount > 0 ? '' : ' disabled'}>clear</button>
+      <span class="free-small-status">${escapeHtml(fMarkText)}</span>
+    </div>
+    <div class="ab-union-toolbar">
+      <label><input type="checkbox" data-ab-show-original${abUnionState.showOriginalRegion ? ' checked' : ''}/>original AB union</label>
+      <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
+      <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
       <label>center
         <select data-ab-center-mode>
           <option value="none"${abUnionState.centerMode === 'none' ? ' selected' : ''}>none</option>
@@ -2063,8 +2328,6 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-preset="equality">equality</button>
-      <button type="button" class="free-button" data-ab-preset="near-miss">near miss</button>
-      <button type="button" class="free-button" data-ab-preset="random-strict">random strict</button>
       <button type="button" class="free-button" data-ab-preset="midpoint">midpoints</button>
     </div>
     <div class="ab-union-row">
@@ -2073,7 +2336,6 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-optimize>optimize theta</button>
-      <button type="button" class="free-button" data-ab-search>random batch</button>
     </div>
     <div class="ab-union-readout">
       <span>L(theta)</span><strong>${result.currentL.toFixed(5)}</strong>
@@ -2084,24 +2346,119 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>center shape</span><strong>${escapeHtml(abUnionCenterLabel(abUnionState.centerMode))}</strong>
       <span>center contains U</span><strong class="${centerContainsClass}">${escapeHtml(centerContainsText)}</strong>
       <span>red pair search</span><strong class="${farPairClass}">${escapeHtml(farPairText)}</strong>
+      <span>f marks</span><strong>${escapeHtml(fMarkText)}</strong>
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
-      <span>min |b_i-b_{i-1}|</span><strong>${result.minSeparation.toExponential(3)}</strong>
+      <span>compute model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
+      <span>visible overlays</span><strong>${escapeHtml(abUnionOverlayLabel())}</strong>
+      <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
-    <div class="ab-union-section-title">equality detector</div>
+    <div class="free-row"><span>${escapeHtml(abUnionState.status)}</span></div>
+    <div class="free-row"><strong>labels</strong></div>
+    ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting sources.</div>'}
+    <div class="ab-union-section-title">edge dots</div>
     <table class="ab-union-table">
-      <thead><tr><th>same b</th><th>i</th><th>b prev</th><th>b_i</th><th>a_i+b_i</th><th>eq?</th></tr></thead>
-      <tbody>${equalityRowsHtml}</tbody>
+      <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+      <tbody>${edgeRowsHtml}</tbody>
     </table>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>a_i</th><th>b_i</th><th>d_i</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix a+b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
-    <div class="ab-union-section-title">random search</div>
+  `;
+}
+
+function renderAbHullDebugPanel(result: AbHullDebugResult): void {
+  const coverageClass = result.closed && result.missedCount === 0
+    ? 'ab-union-ok'
+    : result.closed ? 'ab-union-bad' : '';
+  const coverageText = result.closed
+    ? result.missedCount === 0
+      ? `contains all ${result.sampleCount} samples`
+      : `misses ${result.missedCount} of ${result.sampleCount}`
+    : `${result.sampleCount} exact samples; polygon open`;
+  const exportCount = abHullDebugState.exports.length;
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-toolbar">
+      <label>a
+        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
+      <label>b
+        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
+      <span class="free-small-status">a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}</span>
+    </div>
+    <div class="ab-union-toolbar">
+      <button type="button" class="free-button" data-hull-debug-close${abHullDebugState.vertices.length >= 3 && !abHullDebugState.closed ? '' : ' disabled'}>close polygon</button>
+      <button type="button" class="free-button" data-hull-debug-undo${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>undo</button>
+      <button type="button" class="free-button" data-hull-debug-delete${abHullDebugState.selectedIndex !== null && (!abHullDebugState.closed || abHullDebugState.vertices.length > 3) ? '' : ' disabled'}>delete selected dot</button>
+      <button type="button" class="free-button" data-hull-debug-clear${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>clear</button>
+      <button type="button" class="free-button" data-hull-debug-suggested>load suggested hull</button>
+      <button type="button" class="free-button" data-hull-debug-reset>reset example</button>
+    </div>
+    <div class="ab-union-toolbar">
+      <button type="button" class="free-button" data-hull-debug-export${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>export current</button>
+      <button type="button" class="free-button" data-hull-debug-copy-exports${exportCount > 0 ? '' : ' disabled'}>copy json</button>
+      <button type="button" class="free-button" data-hull-debug-clear-exports${exportCount > 0 ? '' : ' disabled'}>clear exports</button>
+      <span class="free-small-status">${exportCount} exported</span>
+    </div>
+    <div class="ab-union-readout">
+      <span>coverage</span><strong class="${coverageClass}">${escapeHtml(coverageText)}</strong>
+      <span>vertices</span><strong>${abHullDebugState.vertices.length}${abHullDebugState.closed ? ' closed' : ''}</strong>
+      <span>edge directions</span><strong>u, v, u-v</strong>
+      <span>status</span><strong>${escapeHtml(abHullDebugState.status)}</strong>
+    </div>
+    <div class="ab-union-section-title">current polygon</div>
+    <textarea id="ab-hull-debug-vertices" readonly spellcheck="false">${escapeHtml(result.vertexText)}</textarea>
+    <div class="ab-union-section-title">experiment json</div>
+    <textarea id="ab-hull-debug-export-json" readonly spellcheck="false">${escapeHtml(formatAbHullDebugExports(abHullDebugState))}</textarea>
+  `;
+}
+
+function renderConj0521Panel(result: Conj0521RenderResult): void {
+  const rowHtml = result.rows.map((row) => `
+    <tr>
+      <td>R${row.index}</td>
+      <td>${row.a.toFixed(4)}</td>
+      <td>${row.b.toFixed(4)}</td>
+      <td>${row.sum.toFixed(4)}</td>
+      <td>${escapeHtml(row.constraint)}</td>
+      <td><span class="ab-union-pill ${row.ok ? 'is-good' : 'is-warn'}">${row.ok ? 'ok' : 'check'}</span></td>
+    </tr>
+  `).join('');
+  const pointHtml = result.points.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.id)}</td>
+      <td>${escapeHtml(item.label)}</td>
+      <td>${item.point ? item.point.x.toFixed(5) : 'missing'}</td>
+      <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
+    </tr>
+  `).join('');
+  const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
+  const sideClass = result.triangle && result.triangle.side <= 1
+    ? 'ab-union-ok'
+    : result.triangle ? 'ab-union-bad' : '';
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-readout">
+      <span>4-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
+      <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
+      <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
+      <span>status</span><strong>${escapeHtml(result.status)}</strong>
+    </div>
+    <div class="ab-union-section-title">0521 constraints</div>
     <table class="ab-union-table">
-      <thead><tr><th>#</th><th>L*</th><th>theta</th><th>sep</th><th>class</th></tr></thead>
-      <tbody>${searchRows || '<tr><td colspan="5">no batch run yet</td></tr>'}</tbody>
+      <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
+      <tbody>${rowHtml}</tbody>
+    </table>
+    <div class="ab-union-section-title">four points</div>
+    <table class="ab-union-table">
+      <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
+      <tbody>${pointHtml}</tbody>
     </table>
   `;
 }
@@ -2117,7 +2474,23 @@ function toggleSelectedHalfDiagonal(index: number): void {
 }
 
 function isCoverOverlayAvailable(): boolean {
-  return shapeMode !== 'free' && shapeMode !== 'ab-union';
+  return shapeMode !== 'free' &&
+    shapeMode !== 'ab-union' &&
+    shapeMode !== 'ab-hull-debug' &&
+    shapeMode !== 'conj-0521';
+}
+
+function syncPointToolControls(): void {
+  normalizeSelectedPointSeed();
+  const visible = shapeMode !== 'free' &&
+    shapeMode !== 'ab-union' &&
+    shapeMode !== 'ab-hull-debug' &&
+    shapeMode !== 'conj-0521';
+  pointToolPanel.hidden = !visible;
+  pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
+  pointDeleteButton.disabled = !freeState.selectedPointSeedId;
+  pointClearButton.disabled = freeState.pointSeeds.length === 0;
+  pointToolStatus.textContent = pointSeedStatusText();
 }
 
 function syncModeButtons(): void {
@@ -2129,6 +2502,10 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'Free mode';
   } else if (shapeMode === 'ab-union') {
     shapeTitle.textContent = 'ab union';
+  } else if (shapeMode === 'ab-hull-debug') {
+    shapeTitle.textContent = 'AB hull debug';
+  } else if (shapeMode === 'conj-0521') {
+    shapeTitle.textContent = '0521 conj';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -2140,15 +2517,21 @@ function syncModeButtons(): void {
   }
   const freeActive = shapeMode === 'free';
   const abUnionActive = shapeMode === 'ab-union';
-  sliderRow.hidden = freeActive || abUnionActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive;
+  const abHullDebugActive = shapeMode === 'ab-hull-debug';
+  const conj0521Active = shapeMode === 'conj-0521';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !conj0521Active;
+  abUnionPanelTitle.textContent = abHullDebugActive
+    ? 'AB hull debug'
+    : conj0521Active ? '0521 conj' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
   coverOverlayToggleRow.classList.toggle('is-disabled', !isCoverOverlayAvailable());
+  syncPointToolControls();
 }
 
 function setAdmissibleStatus(text: string, isError = false): void {
@@ -2204,6 +2587,7 @@ function applyAdmissibleEditorSource(): void {
 }
 
 function render(): void {
+  syncPointToolControls();
   if (shapeMode === 'free') {
     initializeFreeFromCurrentIfNeeded();
     syncFreeStrictEps();
@@ -2236,9 +2620,9 @@ function render(): void {
     drawHexagon(ctx);
     const abResult = renderAbUnion(ctx, abUnionState, triangleState, manualLocalCs);
 
-    gammaValues.textContent = `b = ${formatTuple(abUnionState.b)}`;
-    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}`;
-    localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min separation = ${abResult.minSeparation.toExponential(3)}`;
+    gammaValues.textContent = `${formatAbUnionValues('a', abUnionAValues(abUnionState))}; ${formatAbUnionValues('b', abUnionBValues(abUnionState))}`;
+    localCBounds.textContent = `center = ${abUnionCenterLabel(abUnionState.centerMode)}, quality = ${abUnionState.quality}, compute = ${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}`;
+    localCValues.textContent = `L(theta) = ${abResult.currentL.toFixed(5)}, min equality gap = ${abResult.minEqualityGap.toExponential(3)}`;
     ceStatus.textContent = 'ab union: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
     ceChainStatus.textContent = abUnionState.centerMode === 'none'
@@ -2249,9 +2633,57 @@ function render(): void {
     ceChainStatus.style.color = abUnionState.centerMode === 'none'
       ? '#64748b'
       : abResult.centerContains ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = abUnionState.showRegion ? 'union region visible' : 'union region hidden';
+    coverOverlayStatus.textContent = `ab union overlays: ${abUnionOverlayLabel()}`;
     coverOverlayStatus.style.color = '#475569';
     renderAbUnionPanel(abResult);
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'ab-hull-debug') {
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    const result = renderAbHullDebug(ctx, abHullDebugState);
+    currentAbHullDebugResult = result;
+
+    gammaValues.textContent = `hull debug: a=${abHullDebugState.a.toFixed(3)}, b=${abHullDebugState.b.toFixed(3)}, a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}`;
+    localCBounds.textContent = 'local view: u along V_i to V_{i+1}, v along V_i to V_{i-1}';
+    localCValues.textContent = result.closed
+      ? result.missedCount === 0
+        ? 'drawn polygon contains sampled exact set'
+        : `drawn polygon misses ${result.missedCount} sampled points`
+      : 'click vertices, then close polygon';
+    ceStatus.textContent = 'Hull debug: diagnostic drawing mode';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = 'Snaps to hex-axis directions: u, v, and u-v';
+    ceChainStatus.style.color = '#475569';
+    coverOverlayStatus.textContent = 'Hull debug does not change ab union masks';
+    coverOverlayStatus.style.color = '#64748b';
+    regionRenderer.render();
+    renderAbHullDebugPanel(result);
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'conj-0521') {
+    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    const result = renderConj0521(ctx, conj0521State, triangleState, manualLocalCs);
+
+    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
+    localCBounds.textContent = `0521 slice: a1+b1=a3+b3=a5+b5=1, a4+b4>1`;
+    localCValues.textContent = result.triangle
+      ? `4-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `4-point side unavailable: ${result.status}`;
+    ceStatus.textContent = '0521 conj: CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
+    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
+    coverOverlayStatus.style.color = '#475569';
+    regionRenderer.render();
+    renderConj0521Panel(result);
     syncControllerSnapshot();
     return;
   }
@@ -2275,7 +2707,8 @@ function render(): void {
   const ce = shapeMode === 'triangle' ? getCPerimeterIntersections(triangleState) : null;
   const chain = buildChainDescriptor(localCs, ce);
   currentChain = chain;
-  const coverResult = isCoverOverlayAvailable() && showCoverOverlay
+  const needsPointCoverage = freeState.pointSeeds.length > 0;
+  const coverResult = isCoverOverlayAvailable() && (showCoverOverlay || needsPointCoverage)
     ? computeCoverResult(
         triangleState,
         chain.localCs,
@@ -2286,11 +2719,12 @@ function render(): void {
         shapeMode === 'triangle',
       )
     : null;
+  const pointCoverage = computeNonFreePointCoverage(coverResult);
   syncCeControls(ce);
 
   ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
   drawHexagon(ctx);
-  if (coverResult) {
+  if (coverResult && showCoverOverlay) {
     drawCoverTriangleOverlay(ctx, coverResult.vTriangles);
   }
   drawSelectedHalfDiagonals(ctx, selectedHalfDiagonalIndices);
@@ -2300,6 +2734,7 @@ function render(): void {
     drawControlPoint(ctx, triangleState);
     drawCeIntervals(ctx, ce?.intervals ?? [], chain.selectedInterval);
   }
+  drawSymmetricPoints(ctx, new Set(pointCoverage.failures));
 
   if (shapeMode === 'local-c') {
     gammaValues.textContent = 'manual c_i mode';
@@ -2318,10 +2753,15 @@ function render(): void {
   ceChainStatus.textContent = summarizeCeChain(chain);
   ceChainStatus.style.color = chain.passes === null ? '#475569' : chain.passes ? '#047857' : '#b91c1c';
   drawPropagationMarkers(ctx, chain);
-  if (coverResult) {
+  if (coverResult && showCoverOverlay) {
     drawCoverageGaps(ctx, coverResult.segments);
-    coverOverlayStatus.textContent = summarizeCoverResult(coverResult);
-    coverOverlayStatus.style.color = coverResult.coverageOk && coverResult.tooLargeTriangles.length === 0
+    coverOverlayStatus.textContent = summarizeCoverResult(coverResult, pointCoverage);
+    coverOverlayStatus.style.color = coverResult.coverageOk && pointCoverage.failures.length === 0 && coverResult.tooLargeTriangles.length === 0
+      ? '#047857'
+      : '#b91c1c';
+  } else if (coverResult) {
+    coverOverlayStatus.textContent = summarizeCoverResult(coverResult, pointCoverage);
+    coverOverlayStatus.style.color = coverResult.coverageOk && pointCoverage.failures.length === 0 && coverResult.tooLargeTriangles.length === 0
       ? '#047857'
       : '#b91c1c';
   } else if (!isCoverOverlayAvailable()) {
@@ -2389,6 +2829,22 @@ strictEpsMaxInput.addEventListener('change', () => {
 coverOverlayToggle.addEventListener('change', () => {
   showCoverOverlay = coverOverlayToggle.checked && isCoverOverlayAvailable();
   syncModeButtons();
+  render();
+});
+
+pointToolToggle.addEventListener('click', () => {
+  pointToolActive = !pointToolActive;
+  syncPointToolControls();
+  render();
+});
+
+pointDeleteButton.addEventListener('click', () => {
+  deleteSelectedPointSeed();
+  render();
+});
+
+pointClearButton.addEventListener('click', () => {
+  clearPointSeeds();
   render();
 });
 
@@ -2473,6 +2929,18 @@ freeControls.addEventListener('click', (event) => {
     currentV0Sample = null;
     currentCSample = null;
     freeState.status = 'Cleared sampling data.';
+    render();
+    return;
+  }
+  const deletePointSeedButton = target.closest<HTMLButtonElement>('[data-delete-point-seed]');
+  if (deletePointSeedButton) {
+    deleteSelectedPointSeed();
+    render();
+    return;
+  }
+  const clearPointSeedsButton = target.closest<HTMLButtonElement>('[data-clear-point-seeds]');
+  if (clearPointSeedsButton) {
+    clearPointSeeds();
     render();
     return;
   }
@@ -2700,9 +3168,103 @@ freeStateLoadButton.addEventListener('click', () => {
   }
 });
 
-abUnionControls.addEventListener('click', (event) => {
+abUnionControls.addEventListener('click', async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  if (target.dataset.hullDebugClose !== undefined) {
+    closeAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugUndo !== undefined) {
+    undoAbHullDebugVertex(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugDelete !== undefined) {
+    deleteSelectedAbHullDebugVertex(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugClear !== undefined) {
+    clearAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugReset !== undefined) {
+    resetAbHullDebugExample(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugSuggested !== undefined) {
+    loadSuggestedAbHullDebugPolygon(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugExport !== undefined) {
+    if (currentAbHullDebugResult) {
+      exportAbHullDebugExperiment(abHullDebugState, currentAbHullDebugResult);
+    }
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugClearExports !== undefined) {
+    clearAbHullDebugExports(abHullDebugState);
+    render();
+    return;
+  }
+  if (target.dataset.hullDebugCopyExports !== undefined) {
+    const exportCount = abHullDebugState.exports.length;
+    if (exportCount === 0) {
+      abHullDebugState.status = 'No exported experiments to copy.';
+      render();
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(formatAbHullDebugExports(abHullDebugState));
+      abHullDebugState.status = `Copied ${exportCount} exported experiment${exportCount === 1 ? '' : 's'} as JSON.`;
+      render();
+    } catch {
+      abHullDebugState.status = 'Clipboard unavailable. JSON selected for manual copy.';
+      render();
+      const textarea = document.getElementById('ab-hull-debug-export-json') as HTMLTextAreaElement | null;
+      textarea?.focus();
+      textarea?.select();
+    }
+    return;
+  }
+  const tool = target.dataset.abTool;
+  if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark' || tool === 'f-mark') {
+    setAbUnionTool(abUnionState, tool);
+    render();
+    return;
+  }
+  if (target.dataset.abFmarkDelete !== undefined) {
+    deleteSelectedAbUnionFMark(abUnionState);
+    render();
+    return;
+  }
+  if (target.dataset.abFmarkClear !== undefined) {
+    clearAbUnionFMarks(abUnionState);
+    render();
+    return;
+  }
+  const snapLabel = target.dataset.abSnapLabel;
+  const snapRole = target.dataset.abSnapRole;
+  if (snapLabel && isAbUnionCoincidenceRole(snapRole)) {
+    const edge = Number(target.dataset.abSnapEdge);
+    if (Number.isInteger(edge) && edge >= 0 && edge < 6) {
+      snapAbUnionLabelToEdge(abUnionState, snapLabel, edge, snapRole);
+      render();
+    }
+    return;
+  }
+  const deleteLabel = target.dataset.abDeleteLabel;
+  if (deleteLabel) {
+    deleteAbUnionLabel(abUnionState, deleteLabel);
+    render();
+    return;
+  }
   const preset = target.dataset.abPreset as AbUnionPreset | undefined;
   if (preset) {
     setAbUnionPreset(abUnionState, preset);
@@ -2715,15 +3277,17 @@ abUnionControls.addEventListener('click', (event) => {
     render();
     return;
   }
-  if (target.dataset.abSearch !== undefined) {
-    abUnionState.searchResults = runAbUnionRandomSearch();
-    render();
-  }
 });
 
 abUnionControls.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
+  const debugParam = target.dataset.hullDebugParam;
+  if (debugParam === 'a' || debugParam === 'b') {
+    setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
+    render();
+    return;
+  }
   if (target.dataset.abTheta !== undefined) {
     abUnionState.theta = Math.max(0, Math.min(120, Number(target.value))) * Math.PI / 180;
     abUnionState.lastOptimized = null;
@@ -2733,8 +3297,8 @@ abUnionControls.addEventListener('input', (event) => {
 
 abUnionControls.addEventListener('change', (event) => {
   const target = event.target;
-  if (target instanceof HTMLInputElement && target.dataset.abShowRegion !== undefined) {
-    abUnionState.showRegion = target.checked;
+  if (target instanceof HTMLInputElement && target.dataset.abShowOriginal !== undefined) {
+    abUnionState.showOriginalRegion = target.checked;
     render();
     return;
   }
@@ -2754,6 +3318,26 @@ abUnionControls.addEventListener('change', (event) => {
     render();
     return;
   }
+  if (target instanceof HTMLInputElement && target.dataset.abAxisHull !== undefined) {
+    abUnionState.useAxisAlignedHull = target.checked;
+    abUnionState.lastOptimized = null;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abCenterLocked !== undefined) {
+    abUnionState.centerLocked = target.checked;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abCoincidenceLabel !== undefined) {
+    const edge = Number(target.dataset.abCoincidenceEdge);
+    const role = target.dataset.abCoincidenceRole;
+    if (Number.isInteger(edge) && edge >= 0 && edge < 6 && isAbUnionCoincidenceRole(role)) {
+      setAbUnionCoincidenceLock(abUnionState, target.dataset.abCoincidenceLabel, edge, role, target.checked);
+      render();
+    }
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.abRegionVisible !== undefined) {
     const index = Number(target.dataset.abRegionVisible);
     if (Number.isInteger(index) && index >= 0 && index < 6) {
@@ -2762,10 +3346,21 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.abEqualityLock !== undefined) {
-    const index = Number(target.dataset.abEqualityLock);
+  if (target instanceof HTMLInputElement && target.dataset.abFixedSum !== undefined) {
+    const index = Number(target.dataset.abFixedSum);
     if (Number.isInteger(index) && index >= 0 && index < 6) {
-      setAbUnionEqualityLock(abUnionState, index, target.checked);
+      setAbUnionFixedSum(abUnionState, index, target.checked);
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.abLockKind !== undefined) {
+    const index = Number(target.dataset.abLockIndex);
+    const kind = target.dataset.abLockKind;
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      if (kind === 'a' || kind === 'b') {
+        setAbUnionLock(abUnionState, kind, index, target.checked);
+      }
       render();
     }
     return;
@@ -2833,12 +3428,38 @@ setupInteraction(
     toggleSelectedHalfDiagonal(index);
     render();
   },
+  {
+    isActive: () => pointToolActive,
+    seeds: () => freeState.pointSeeds,
+    create: addPointSeed,
+    move: movePointSeed,
+    select: selectPointSeed,
+  },
 );
 
 setupAbUnionInteraction(
   canvas,
   () => shapeMode === 'ab-union',
   () => abUnionState,
+  triangleState,
+  () => manualLocalCs,
+  (index, value) => {
+    manualLocalCs[index] = clampToLocalCMax(value, 1);
+  },
+  render,
+);
+
+setupAbHullDebugInteraction(
+  canvas,
+  () => shapeMode === 'ab-hull-debug',
+  () => abHullDebugState,
+  render,
+);
+
+setupAbUnionInteraction(
+  canvas,
+  () => shapeMode === 'conj-0521',
+  () => conj0521State,
   triangleState,
   () => manualLocalCs,
   (index, value) => {

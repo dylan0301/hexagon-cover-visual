@@ -1,6 +1,7 @@
 import type { Point } from './types';
 import { HEXAGON_VERTICES } from './hexagon';
 import { fitTriangle, type CoverTriangle } from './cover';
+import { buildSymmetricPointTargets } from './symmetricPoints';
 import {
   type FreeConstraintStatus,
   type FreeLabel,
@@ -106,6 +107,8 @@ export function createDefaultFreeState(): FreeState {
     triangles,
     labels: [],
     selectedSegments: [],
+    pointSeeds: [],
+    selectedPointSeedId: null,
     status: 'Free mode ready.',
     sampling: { v: [], c: [], rejected: [] },
   };
@@ -820,8 +823,9 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
   }
 
   const pointFailures: string[] = [];
+  const points: Array<{ label: string; point: Point }> = [];
   if (state.target === 'S_HALF' || state.target === 'S_T' || state.target === 'BENZENE') {
-    const points = [
+    points.push(
       ...(state.target === 'BENZENE' ? [] : [{ label: 'O', point: { x: 0, y: 0 } }]),
       ...(state.target === 'BENZENE'
         ? [0, 1, 2, 3, 4, 5].map((i) => ({ label: `B${i}`, point: benzenePoint(i) }))
@@ -831,11 +835,15 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
           [0, 1, 2, 3, 4, 5].map((i) => ({ label: targetTLabel(i, target.id), point: targetTPoint(target, i) })),
         )
         : []),
-    ];
-    for (const { label, point } of points) {
-      if (!state.triangles.some((triangle) => strictPointInTriangle(point, triangle, state.strictEps))) {
-        pointFailures.push(label);
-      }
+    );
+  }
+  points.push(...buildSymmetricPointTargets(state.pointSeeds).map((target) => ({
+    label: target.label,
+    point: target.point,
+  })));
+  for (const { label, point } of points) {
+    if (!state.triangles.some((triangle) => strictPointInTriangle(point, triangle, state.strictEps))) {
+      pointFailures.push(label);
     }
   }
 

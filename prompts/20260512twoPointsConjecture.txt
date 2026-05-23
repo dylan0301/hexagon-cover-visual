@@ -1,0 +1,7 @@
+in triangle mode, c_i mode, circle mode, free mode,
+make it able to plot dots anywhere in the hexagon.
+then D6 symmetry it to make it 12 points.
+
+the coverablity detects also if the newly made points are covered.
+add this point tool at tool kit.
+ask me questions

@@ -278,17 +278,28 @@ The `ab union` mode studies a related corner-region problem. For each edge
 \[
 e_i=[V_i,V_{i+1}]
 \]
-choose
+choose one or two ordered boundary dots
 \[
-p_i=V_i+b_i(V_{i+1}-V_i), \qquad 0 \le b_i \le 1.
+X_i=V_i+\ell_i(V_{i+1}-V_i),\qquad
+Y_i=V_i+r_i(V_{i+1}-V_i),
+\qquad 0\le \ell_i\le r_i\le 1.
 \]
-At vertex `V_i`, the incoming length is
+A one-dot edge is the special case \(\ell_i=r_i\).  The outgoing value at
+`V_i` is
 \[
-a_i=1-b_{i-1}.
+b_i=\ell_i,
 \]
-Thus the equality case is
+and the incoming value at `V_{i+1}` is
 \[
-a_i+b_i=1 \iff b_i=b_{i-1}.
+a_{i+1}=1-r_i.
+\]
+Thus at vertex `V_i`,
+\[
+a_i=1-r_{i-1}.
+\]
+The equality case is
+\[
+a_i+b_i=1 \iff \ell_i=r_{i-1}.
 \]
 
 The local coordinates at `V_i` use the two boundary directions toward `V_{i+1}` and `V_{i-1}`. In those coordinates a sampled point has coordinates `(u,v)` with `u,v >= 0`, and the metric is
@@ -297,13 +308,13 @@ The local coordinates at `V_i` use the two boundary directions toward `V_{i+1}` 
 \]
 The displayed region `R_i` is computed from the local membership predicate for all unit equilateral triangles containing
 \[
-V_i,\quad p_{i-1},\quad p_i
+V_i,\quad Y_{i-1},\quad X_i
 \]
 inside the local `120^\circ` cone. The table value
 \[
 d_i=\sqrt{a_i^2+a_i b_i+b_i^2}
 \]
-is the distance between the adjacent edge points `p_{i-1}` and `p_i`; if `d_i>1`, the local required set cannot fit inside a unit equilateral triangle.
+is the distance between the adjacent edge dots `Y_{i-1}` and `X_i`; if `d_i>1`, the local required set cannot fit inside a unit equilateral triangle.
 
 The uncovered red region is
 \[
@@ -319,8 +330,14 @@ Optional UI modifiers:
 
 - Individual region visibility affects only the displayed covered fill.
 - `clip to corner sectors` clips each `R_i` by the adjacent half-diagonal sector; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
+- `hex-axis hull` replaces rows with `a_i+b_i < 1` by a coarse sampled hull clipped in the third hex direction. The target clip lines pass through the adjacent-edge boundary hits `(h(a_i),0)` and `(0,h(b_i))`, where `h(t)=(-t+sqrt(4-3t^2))/2`; if needed they relax to the sampled exact support so the hull still contains the sampled region. Other rows fall back to the exact sampled predicate.
 - The red-pair search checks sampled points of `U` for a witness pair with Euclidean distance greater than `1`.
-- Equality-detector `same b` locks are UI constraints on the selected `b_i` values; they are not additional geometry.
+- `Move`, `Add`, and `Delete` tools edit the edge dots.  An edge has at least one dot and at most two dots.
+- `d-mark` and `s-mark` labels are UI annotations for intersections between the C-triangle or C-circle boundary and a fixed hexagon edge or half-diagonal. `D` labels recompute; `S` labels are frozen at creation time.
+- `f mark` dots are free annotations inside the hexagon; two show their distance, and three or more show the smallest enclosing equilateral triangle.
+- Perimeter-edge labels can move an eligible edge dot once with `snap`, or keep it coincident with the label using a persistent lock.
+- `lock center` freezes the current center geometry controls for the C-triangle, C-circle, or manual `c_i` hull.
+- `same a` and `same b` locks are UI constraints on selected `a_i` and `b_i` values; they are not additional geometry.
 
 ## 12. What remains to prove mathematically
 
@@ -366,7 +383,34 @@ Each \(t_j\) is shared by all six half-diagonals.  In Free mode, dragging any
 \(P_i(t_j)\) changes only that shared \(t_j\), unless that row is locked.  The
 lock only disables the UI handle; it does not change the mathematical target.
 
-## 14. The Benzene target
+## 14. D6 point-orbit targets
+
+The app also has an interactive point tool in Triangle, \(c_i\), Circle, and
+Free modes.  A seed point \(Q\in H\) generates the D6 orbit
+\[
+\mathcal O_{D_6}(Q)
+=
+\{r^k Q:k=0,\dots,5\}\cup\{r^k\sigma Q:k=0,\dots,5\},
+\]
+where \(r\) is rotation by \(\pi/3\) about \(O\), and
+\(\sigma(x,y)=(x,-y)\).  The app uses the set of distinct orbit points, so a
+generic seed gives twelve points, while seeds on symmetry axes or at \(O\) may
+give fewer.
+
+For a finite list of seeds \(Q_1,\dots,Q_m\), the additional point target is
+\[
+\mathcal Q
+=
+\bigcup_{\ell=1}^m \mathcal O_{D_6}(Q_\ell).
+\]
+These points are added to the active coverability check.  In Triangle mode
+they are tested against the C-triangle together with the generated
+\(V_i\)-triangles.  In \(c_i\) mode they are tested against the generated
+\(V_i\)-triangles.  In Circle mode they are tested against the C-circle
+together with the generated \(V_i\)-triangles.  In Free mode they are tested
+against all seven placed unit equilateral triangles.
+
+## 15. The Benzene target
 
 Free mode also has a target called **Benzene**.  It adds one fixed point in
 each center subtriangle
@@ -389,7 +433,7 @@ Equivalently, it is the full skeleton together with these six interior
 centroid points.  The \(B_i\) are fixed points; there is no additional
 parameter or drag interaction.
 
-## 15. The lotus target
+## 16. The lotus target
 
 There is another 1-dimensional target set used by the app, called **lotus**.
 Let

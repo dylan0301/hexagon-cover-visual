@@ -96,6 +96,16 @@ canvas {
   padding: 8px;
 }
 
+#point-tool-panel {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  padding: 8px;
+}
+
+#point-tool-panel[hidden] {
+  display: none;
+}
+
 #ce-panel {
   display: flex;
   flex-direction: column;
@@ -362,6 +372,7 @@ canvas {
 .free-toolbar input,
 .ab-union-toolbar select,
 .ab-union-row input,
+.ab-hull-debug-number,
 .free-triangle-row select,
 .free-manual-input,
 .free-target-t-input {
@@ -376,6 +387,28 @@ canvas {
   width: 72px;
 }
 
+.ab-hull-debug-number {
+  width: 78px;
+}
+
+#ab-hull-debug-vertices,
+#ab-hull-debug-export-json {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+#ab-hull-debug-export-json {
+  min-height: 180px;
+}
+
 .free-button {
   border: 1px solid #cbd5e1;
   background: #fff;
@@ -388,6 +421,11 @@ canvas {
 .free-button.is-active {
   border-color: #475569;
   background: #e2e8f0;
+}
+
+.free-button:disabled {
+  cursor: default;
+  opacity: 0.48;
 }
 
 .free-small-status {
