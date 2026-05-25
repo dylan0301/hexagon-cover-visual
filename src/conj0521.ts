@@ -457,7 +457,7 @@ function renderConj(
   buildPoints: (circles: CircleGeometry[], aValues: number[], bValues: number[]) => Conj0521Point[],
 ): Conj0521RenderResult {
   enforce(state);
-  const base = renderAbUnion(ctx, state, triangleState, localCs);
+  const base = renderAbUnion(ctx, state, triangleState, localCs, { computeTheta: false });
   enforce(state);
 
   const aValues = abUnionAValues(state);

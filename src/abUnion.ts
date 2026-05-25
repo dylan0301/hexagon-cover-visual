@@ -170,6 +170,10 @@ export interface AbUnionFarPair {
   exceedsUnit: boolean;
 }
 
+interface AbUnionRenderOptions {
+  computeTheta?: boolean;
+}
+
 interface MaskCache {
   size: number;
   center: number;
@@ -2572,6 +2576,7 @@ export function renderAbUnion(
   state: AbUnionState,
   triangleState: TriangleState,
   localCs: number[],
+  options: AbUnionRenderOptions = {},
 ): AbUnionRenderResult {
   normalizeAbUnionState(state);
   enforceAbUnionLocks(state);
@@ -2581,10 +2586,18 @@ export function renderAbUnion(
   enforceAbUnionLocks(state);
   const uncoveredCount = buildMask(cache, state);
   ctx.drawImage(cache.offscreen, 0, 0, config.canvasSize, config.canvasSize);
-  const shouldOptimizeTheta = state.autoOptimizeTheta && state.thetaOptimizationPending;
-  const thetaResult = shouldOptimizeTheta
-    ? optimizeThetaForMask(cache, 240, state.quality)
-    : computeThetaTriangle(cache, state.theta, state.quality);
+  const computeTheta = options.computeTheta ?? true;
+  const shouldOptimizeTheta = computeTheta && state.autoOptimizeTheta && state.thetaOptimizationPending;
+  const thetaResult = computeTheta
+    ? shouldOptimizeTheta
+      ? optimizeThetaForMask(cache, 240, state.quality)
+      : computeThetaTriangle(cache, state.theta, state.quality)
+    : {
+        theta: state.theta,
+        L: state.lastOptimized?.L ?? 0,
+        vertices: null,
+        analysisCount: 0,
+      };
   if (shouldOptimizeTheta) {
     state.theta = thetaResult.theta;
     state.lastOptimized = { theta: thetaResult.theta, L: thetaResult.L };
