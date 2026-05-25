@@ -2377,6 +2377,42 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   `;
 }
 
+const AB_HULL_DEBUG_PARAM_STEP = '0.000001';
+const AB_HULL_DEBUG_WHEEL_STEP = 0.001;
+
+function isAbHullDebugParam(value: string | undefined): value is 'a' | 'b' {
+  return value === 'a' || value === 'b';
+}
+
+function formatAbHullDebugParameter(value: number): string {
+  return value.toFixed(6);
+}
+
+function applyAbHullDebugParameterInput(target: HTMLInputElement): boolean {
+  const debugParam = target.dataset.hullDebugParam;
+  if (!isAbHullDebugParam(debugParam)) return false;
+  setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
+  return true;
+}
+
+function syncAbHullDebugParameterControls(): void {
+  const values = {
+    a: formatAbHullDebugParameter(abHullDebugState.a),
+    b: formatAbHullDebugParameter(abHullDebugState.b),
+  };
+  for (const key of ['a', 'b'] as const) {
+    abUnionControls
+      .querySelectorAll<HTMLInputElement>(`input[data-hull-debug-param="${key}"]`)
+      .forEach((input) => {
+        input.value = values[key];
+      });
+  }
+  const sum = abUnionControls.querySelector<HTMLElement>('[data-hull-debug-sum]');
+  if (sum) {
+    sum.textContent = `a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}`;
+  }
+}
+
 function renderAbHullDebugPanel(result: AbHullDebugResult): void {
   const coverageClass = result.closed && result.missedCount === 0
     ? 'ab-union-ok'
@@ -2388,18 +2424,20 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
     : `${result.sampleCount} exact samples; polygon open`;
   const exportCount = abHullDebugState.exports.length;
   const noSuggestedHull = abHullDebugState.a + abHullDebugState.b >= 1 - 1e-9;
+  const aValue = formatAbHullDebugParameter(abHullDebugState.a);
+  const bValue = formatAbHullDebugParameter(abHullDebugState.b);
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
       <label>a
-        <input type="range" min="0" max="1" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
+        <input type="range" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${aValue}" data-hull-debug-param="a"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${aValue}" data-hull-debug-param="a"/>
       <label>b
-        <input type="range" min="0" max="1" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
+        <input type="range" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${bValue}" data-hull-debug-param="b"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
-      <span class="free-small-status">a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}</span>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${bValue}" data-hull-debug-param="b"/>
+      <span class="free-small-status" data-hull-debug-sum>a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}</span>
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-hull-debug-close${abHullDebugState.vertices.length >= 3 && !abHullDebugState.closed ? '' : ' disabled'}>close polygon</button>
@@ -2666,7 +2704,7 @@ function render(): void {
     const result = renderAbHullDebug(ctx, abHullDebugState);
     currentAbHullDebugResult = result;
 
-    gammaValues.textContent = `hull debug: a=${abHullDebugState.a.toFixed(3)}, b=${abHullDebugState.b.toFixed(3)}, a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}`;
+    gammaValues.textContent = `hull debug: a=${formatAbHullDebugParameter(abHullDebugState.a)}, b=${formatAbHullDebugParameter(abHullDebugState.b)}, a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}`;
     localCBounds.textContent = 'local view: full hex footprint in u,v coordinates';
     localCValues.textContent = result.closed
       ? result.missedCount === 0
@@ -3330,9 +3368,10 @@ abUnionControls.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   const debugParam = target.dataset.hullDebugParam;
-  if (debugParam === 'a' || debugParam === 'b') {
+  if (isAbHullDebugParam(debugParam)) {
+    if (target.type === 'number') return;
     setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
-    render();
+    syncAbHullDebugParameterControls();
     return;
   }
   if (target.dataset.abTheta !== undefined) {
@@ -3343,8 +3382,37 @@ abUnionControls.addEventListener('input', (event) => {
   }
 });
 
+abUnionControls.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (!applyAbHullDebugParameterInput(target)) return;
+  render();
+  event.preventDefault();
+});
+
+abUnionControls.addEventListener('wheel', (event) => {
+  if (shapeMode !== 'ab-hull-debug') return;
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  const debugParam = target.dataset.hullDebugParam;
+  if (!isAbHullDebugParam(debugParam) || event.deltaY === 0) return;
+  const direction = event.deltaY < 0 ? 1 : -1;
+  setAbHullDebugParameter(
+    abHullDebugState,
+    debugParam,
+    abHullDebugState[debugParam] + direction * AB_HULL_DEBUG_WHEEL_STEP,
+  );
+  render();
+  event.preventDefault();
+});
+
 abUnionControls.addEventListener('change', (event) => {
   const target = event.target;
+  if (target instanceof HTMLInputElement && applyAbHullDebugParameterInput(target)) {
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.abShowOriginal !== undefined) {
     abUnionState.showOriginalRegion = target.checked;
     render();

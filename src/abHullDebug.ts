@@ -92,6 +92,10 @@ function clamp02(value: number): number {
   return Math.max(0, Math.min(2, value));
 }
 
+function clampParameter(value: number): number {
+  return Math.max(0, Math.min(PARAM_LIMIT, value));
+}
+
 function inDebugFootprint(point: AbHullDebugVertex): boolean {
   return point.u >= -1e-9 &&
     point.u <= 2 + 1e-9 &&
@@ -121,9 +125,9 @@ export function setAbHullDebugParameter(
   rawValue: number,
 ): void {
   if (!Number.isFinite(rawValue)) return;
-  const value = Math.max(0, Math.min(PARAM_LIMIT, rawValue));
+  const value = roundDebugValue(clampParameter(rawValue));
   state[key] = value;
-  state.status = `Set ${key}=${value.toFixed(3)}.`;
+  state.status = `Set ${key}=${value.toFixed(6)}.`;
 }
 
 export function resetAbHullDebugExample(state: AbHullDebugState): void {
@@ -132,7 +136,7 @@ export function resetAbHullDebugExample(state: AbHullDebugState): void {
   state.vertices = [];
   state.closed = false;
   state.selectedIndex = null;
-  state.status = 'Reset to a=0.200, b=0.500.';
+  state.status = 'Reset to a=0.200000, b=0.500000.';
 }
 
 export function clearAbHullDebugPolygon(state: AbHullDebugState): void {
