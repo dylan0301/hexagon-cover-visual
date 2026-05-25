@@ -9,3 +9,20 @@ make it able to toggle on and off the auto optimizing
 when auto optimizing theta it is too slow because of computation.
 so only optimize when i dragged the points and stop clicking my mouse, or added point or delete point
 only after full change is done
+
+in conj0521, we chose 4 points
+make a conj0525, where we choose 5 points and find minimal enclosing triangle.
+the first two points are same as before, the intersection of two circles and the ab union curve for V4
+now we choose other 3 points on the diagonal d0,d1,d2.
+we choose the points farthest from center and inside the red uncovered region by ab union sets.
+for example, there would be case where we choose just normal max gamma for V0,V1,V2
+there would be case where the ab union set for V2 is too large that it crosses d1, and we have to choose the intersection point of d1 and ab union curve for V2
+all other things work similarly as conj0521
+ask me questions
+
+we don't have assumption on a_1+b_1=1. only a_1+b_1<=1
+
+similar to other files in proof2, make describing conj0525 md file.
+it cexplicitly contains how the 5 points are chosen, it has to be self contained.
+and write the conjecture that always minimal enclosing triangle side length is >1.
+we have same reduction for a_3+b_3=1 and a_5+b_5=1

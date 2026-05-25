@@ -16,7 +16,8 @@ export type ShapeMode =
   | 'free'
   | 'ab-union'
   | 'ab-hull-debug'
-  | 'conj-0521';
+  | 'conj-0521'
+  | 'conj-0525';
 
 export type InteractionState =
   | { kind: 'idle' }

@@ -138,7 +138,9 @@ import {
 } from './abHullDebug';
 import {
   createDefaultConj0521State,
+  createDefaultConj0525State,
   renderConj0521,
+  renderConj0525,
   type Conj0521RenderResult,
 } from './conj0521';
 
@@ -229,6 +231,7 @@ let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
 let conj0521State = createDefaultConj0521State();
+let conj0525State = createDefaultConj0525State();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 
 interface ControllerSnapshot {
@@ -689,7 +692,8 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'free' ||
     value === 'ab-union' ||
     value === 'ab-hull-debug' ||
-    value === 'conj-0521';
+    value === 'conj-0521' ||
+    value === 'conj-0525';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -2424,7 +2428,13 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
   `;
 }
 
-function renderConj0521Panel(result: Conj0521RenderResult): void {
+function countWord(count: number): string {
+  if (count === 4) return 'four';
+  if (count === 5) return 'five';
+  return count.toString();
+}
+
+function renderConjPanel(result: Conj0521RenderResult, constraintsTitle: string): void {
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -2447,20 +2457,21 @@ function renderConj0521Panel(result: Conj0521RenderResult): void {
   const sideClass = result.triangle && result.triangle.side <= 1
     ? 'ab-union-ok'
     : result.triangle ? 'ab-union-bad' : '';
+  const pointCount = result.points.length;
 
   abUnionControls.innerHTML = `
     <div class="ab-union-readout">
-      <span>4-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
+      <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
       <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
       <span>status</span><strong>${escapeHtml(result.status)}</strong>
     </div>
-    <div class="ab-union-section-title">0521 constraints</div>
+    <div class="ab-union-section-title">${escapeHtml(constraintsTitle)}</div>
     <table class="ab-union-table">
       <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
       <tbody>${rowHtml}</tbody>
     </table>
-    <div class="ab-union-section-title">four points</div>
+    <div class="ab-union-section-title">${countWord(pointCount)} points</div>
     <table class="ab-union-table">
       <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
       <tbody>${pointHtml}</tbody>
@@ -2482,7 +2493,8 @@ function isCoverOverlayAvailable(): boolean {
   return shapeMode !== 'free' &&
     shapeMode !== 'ab-union' &&
     shapeMode !== 'ab-hull-debug' &&
-    shapeMode !== 'conj-0521';
+    shapeMode !== 'conj-0521' &&
+    shapeMode !== 'conj-0525';
 }
 
 function syncPointToolControls(): void {
@@ -2490,7 +2502,8 @@ function syncPointToolControls(): void {
   const visible = shapeMode !== 'free' &&
     shapeMode !== 'ab-union' &&
     shapeMode !== 'ab-hull-debug' &&
-    shapeMode !== 'conj-0521';
+    shapeMode !== 'conj-0521' &&
+    shapeMode !== 'conj-0525';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -2511,6 +2524,8 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'AB hull debug';
   } else if (shapeMode === 'conj-0521') {
     shapeTitle.textContent = '0521 conj';
+  } else if (shapeMode === 'conj-0525') {
+    shapeTitle.textContent = '0525 conj';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -2523,15 +2538,16 @@ function syncModeButtons(): void {
   const freeActive = shapeMode === 'free';
   const abUnionActive = shapeMode === 'ab-union';
   const abHullDebugActive = shapeMode === 'ab-hull-debug';
-  const conj0521Active = shapeMode === 'conj-0521';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active;
+  const conjActive = shapeMode === 'conj-0521' || shapeMode === 'conj-0525';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || conjActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || conjActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || conjActive;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !conj0521Active;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !conjActive;
   abUnionPanelTitle.textContent = abHullDebugActive
     ? 'AB hull debug'
-    : conj0521Active ? '0521 conj' : 'ab union region';
+    : shapeMode === 'conj-0521' ? '0521 conj'
+      : shapeMode === 'conj-0525' ? '0525 conj' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -2688,7 +2704,31 @@ function render(): void {
     coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConj0521Panel(result);
+    renderConjPanel(result, '0521 constraints');
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'conj-0525') {
+    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs);
+
+    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
+    localCBounds.textContent = '0525 slice: a3+b3=a5+b5=1, a4+b4>1, a0+b0,a1+b1,a2+b2<=1';
+    localCValues.textContent = result.triangle
+      ? `5-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `5-point side unavailable: ${result.status}`;
+    ceStatus.textContent = '0525 conj: CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
+    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
+    coverOverlayStatus.style.color = '#475569';
+    regionRenderer.render();
+    renderConjPanel(result, '0525 constraints');
     syncControllerSnapshot();
     return;
   }
@@ -3476,6 +3516,18 @@ setupAbUnionInteraction(
   canvas,
   () => shapeMode === 'conj-0521',
   () => conj0521State,
+  triangleState,
+  () => manualLocalCs,
+  (index, value) => {
+    manualLocalCs[index] = clampToLocalCMax(value, 1);
+  },
+  render,
+);
+
+setupAbUnionInteraction(
+  canvas,
+  () => shapeMode === 'conj-0525',
+  () => conj0525State,
   triangleState,
   () => manualLocalCs,
   (index, value) => {
