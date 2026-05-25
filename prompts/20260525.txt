@@ -1,0 +1,11 @@
+purple triangle optimize theta 실시간으로 되도록
+hull debug에서 ab union set이 a+b>1일때도 볼 수 있도록: 이때는 추천 hull 없음
+hull debug에서 지금은 대각선에 clipping되는데 더 넓은 영역 view 해서 full ab union set 보기
+think and answer in english
+ask me questions
+
+make it able to toggle on and off the auto optimizing 
+
+when auto optimizing theta it is too slow because of computation.
+so only optimize when i dragged the points and stop clicking my mouse, or added point or delete point
+only after full change is done

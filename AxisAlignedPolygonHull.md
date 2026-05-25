@@ -152,8 +152,17 @@ The local parallelogram bounded by the two adjacent diagonals is
 0 <= v <= 1.
 ```
 
-Hull debug currently samples only this local square, so its suggested hull and
-validation are about the parallelogram-restricted problem.
+Hull debug uses this square only as a faint reference.  Its exact samples and
+validation use the full local hexagon footprint
+
+```text
+0 <= u <= 2,
+0 <= v <= 2,
+|u-v| <= 1.
+```
+
+The suggested hull is available only in the strict case `a+b<1`; for
+`a+b>=1`, hull debug shows the exact set without a recommended hull.
 
 In normal AB union mode, the exact region is clipped to this sector only when
 `clip to corner sectors` is enabled.  If that option is off, the AB union mask is
@@ -314,4 +323,3 @@ from right to left.  Collinear vertices are removed.
 
 Thus the editable polygon is not an independent definition.  It is the boundary
 representation of the sampled slab hull `H(a,b)`.
-

@@ -13,10 +13,18 @@ const HIT_RADIUS_PX = 11;
 const EDGE_HIT_PX = 10;
 const VIEW_PAD = 54;
 const VIEW_MIN_X = -0.62;
-const VIEW_MAX_X = 1.08;
+const VIEW_MAX_X = 1.62;
 const VIEW_MIN_Y = -0.08;
-const VIEW_MAX_Y = 0.98;
-const PARAM_LIMIT = 0.98;
+const VIEW_MAX_Y = 1.82;
+const PARAM_LIMIT = 1;
+const LOCAL_HEX_FOOTPRINT: AbHullDebugVertex[] = [
+  { u: 0, v: 0 },
+  { u: 1, v: 0 },
+  { u: 2, v: 1 },
+  { u: 2, v: 2 },
+  { u: 1, v: 2 },
+  { u: 0, v: 1 },
+];
 
 type AxisFamily = 'u' | 'v' | 'd';
 
@@ -80,15 +88,31 @@ export function createDefaultAbHullDebugState(): AbHullDebugState {
   };
 }
 
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
+function clamp02(value: number): number {
+  return Math.max(0, Math.min(2, value));
+}
+
+function inDebugFootprint(point: AbHullDebugVertex): boolean {
+  return point.u >= -1e-9 &&
+    point.u <= 2 + 1e-9 &&
+    point.v >= -1e-9 &&
+    point.v <= 2 + 1e-9 &&
+    Math.abs(point.u - point.v) <= 1 + 1e-9;
 }
 
 function clampDebugPoint(point: AbHullDebugVertex): AbHullDebugVertex {
-  return {
-    u: clamp01(point.u),
-    v: clamp01(point.v),
-  };
+  let u = clamp02(point.u);
+  let v = clamp02(point.v);
+  if (u - v > 1) {
+    const excess = (u - v - 1) / 2;
+    u -= excess;
+    v += excess;
+  } else if (v - u > 1) {
+    const excess = (v - u - 1) / 2;
+    u += excess;
+    v -= excess;
+  }
+  return { u: clamp02(u), v: clamp02(v) };
 }
 
 export function setAbHullDebugParameter(
@@ -97,8 +121,7 @@ export function setAbHullDebugParameter(
   rawValue: number,
 ): void {
   if (!Number.isFinite(rawValue)) return;
-  const other = key === 'a' ? state.b : state.a;
-  const value = Math.max(0, Math.min(PARAM_LIMIT - other, rawValue));
+  const value = Math.max(0, Math.min(PARAM_LIMIT, rawValue));
   state[key] = value;
   state.status = `Set ${key}=${value.toFixed(3)}.`;
 }
@@ -163,9 +186,10 @@ function sameDebugPoint(a: AbHullDebugVertex, b: AbHullDebugVertex): boolean {
 }
 
 function addPolygonPoint(points: AbHullDebugVertex[], point: AbHullDebugVertex): void {
+  const clamped = clampDebugPoint(point);
   const rounded = {
-    u: roundDebugValue(clamp01(point.u)),
-    v: roundDebugValue(clamp01(point.v)),
+    u: roundDebugValue(clamped.u),
+    v: roundDebugValue(clamped.v),
   };
   const last = points[points.length - 1];
   if (!last || !sameDebugPoint(last, rounded)) {
@@ -202,15 +226,15 @@ function simplifyPolygon(points: AbHullDebugVertex[]): AbHullDebugVertex[] {
 }
 
 function suggestedHullToPolygon(hull: AbUnionHexAxisHull): AbHullDebugVertex[] {
-  const maxU = clamp01(hull.maxU);
+  const maxU = clamp02(hull.maxU);
   if (maxU <= 0 || hull.slabs.length === 0) return [];
   const lowerPoints: AbHullDebugVertex[] = [];
   const upperPoints: AbHullDebugVertex[] = [];
 
   for (const slab of hull.slabs) {
-    const height = clamp01(slab.maxV);
-    const startU = clamp01(slab.uStart);
-    const endU = clamp01(slab.uEnd);
+    const height = clamp02(slab.maxV);
+    const startU = clamp02(slab.uStart);
+    const endU = clamp02(slab.uEnd);
     if (!Number.isFinite(height) || endU < startU) continue;
 
     const candidates = sortedUnique([
@@ -239,7 +263,12 @@ function suggestedHullToPolygon(hull: AbUnionHexAxisHull): AbHullDebugVertex[] {
 }
 
 export function loadSuggestedAbHullDebugPolygon(state: AbHullDebugState): void {
-  const hull = buildAbUnionLocalHexAxisHull(state.a, state.b, SAMPLE_STEPS, 1 / SAMPLE_STEPS);
+  if (state.a + state.b >= 1 - 1e-9) {
+    state.status = 'No suggested hull for a+b >= 1.';
+    return;
+  }
+
+  const hull = buildAbUnionLocalHexAxisHull(state.a, state.b, SAMPLE_STEPS, 2 / SAMPLE_STEPS);
   const polygon = suggestedHullToPolygon(hull);
   if (polygon.length < 3) {
     state.status = 'Could not build suggested hull.';
@@ -389,7 +418,8 @@ function sampleRegion(state: AbHullDebugState): DebugSample[] {
   const samples: DebugSample[] = [];
   for (let iu = 0; iu <= SAMPLE_STEPS; iu++) {
     for (let iv = 0; iv <= SAMPLE_STEPS; iv++) {
-      const point = { u: iu / SAMPLE_STEPS, v: iv / SAMPLE_STEPS };
+      const point = { u: 2 * iu / SAMPLE_STEPS, v: 2 * iv / SAMPLE_STEPS };
+      if (!inDebugFootprint(point)) continue;
       if (!containsAbUnionLocal(point.u, point.v, state.a, state.b)) continue;
       const missed = state.closed && !pointInPolygon(point, state.vertices);
       samples.push({ point, missed });
@@ -482,13 +512,19 @@ export function renderAbHullDebug(
 
   ctx.strokeStyle = '#e2e8f0';
   ctx.lineWidth = 1;
-  for (const value of [0.25, 0.5, 0.75, 1]) {
-    drawGuideLine(ctx, view, { u: value, v: 0 }, { u: value, v: 1 });
-    drawGuideLine(ctx, view, { u: 0, v: value }, { u: 1, v: value });
+  for (const value of [0.5, 1, 1.5]) {
+    drawGuideLine(ctx, view, { u: value, v: Math.max(0, value - 1) }, { u: value, v: Math.min(2, value + 1) });
+    drawGuideLine(ctx, view, { u: Math.max(0, value - 1), v: value }, { u: Math.min(2, value + 1), v: value });
   }
 
   ctx.strokeStyle = '#94a3b8';
   ctx.lineWidth = 1.5;
+  drawPolyline(ctx, view, LOCAL_HEX_FOOTPRINT, true);
+  ctx.stroke();
+
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.lineWidth = 1;
   drawPolyline(ctx, view, [
     { u: 0, v: 0 },
     { u: 1, v: 0 },
@@ -496,6 +532,7 @@ export function renderAbHullDebug(
     { u: 0, v: 1 },
   ], true);
   ctx.stroke();
+  ctx.setLineDash([]);
 
   for (const sample of samples) {
     const point = localToCanvas(sample.point, view);
@@ -604,8 +641,12 @@ function candidateDistance(
   return distance(localToCanvas(candidate, view), localToCanvas(target, view));
 }
 
-function inLooseUnitBox(point: AbHullDebugVertex): boolean {
-  return point.u >= -0.03 && point.u <= 1.03 && point.v >= -0.03 && point.v <= 1.03;
+function inLooseDebugFootprint(point: AbHullDebugVertex): boolean {
+  return point.u >= -0.03 &&
+    point.u <= 2.03 &&
+    point.v >= -0.03 &&
+    point.v <= 2.03 &&
+    Math.abs(point.u - point.v) <= 1.03;
 }
 
 function positiveMod(value: number, modulus: number): number {
@@ -677,7 +718,7 @@ function snapToNeighbor(
     { u: neighbor.u, v: target.v },
     { u: target.u, v: neighbor.v },
     { u: target.u - delta / 2, v: target.v + delta / 2 },
-  ].filter(inLooseUnitBox).map(clampDebugPoint);
+  ].filter(inLooseDebugFootprint).map(clampDebugPoint);
 
   return candidates.reduce((best, candidate) =>
     candidateDistance(candidate, target, view) < candidateDistance(best, target, view)
@@ -704,7 +745,7 @@ function snapMovingVertex(
     const candidates = families.flatMap((first) =>
       families.flatMap((second) => {
         const candidate = intersection(first, previous, second, next);
-        return candidate && inLooseUnitBox(candidate) ? [clampDebugPoint(candidate)] : [];
+        return candidate && inLooseDebugFootprint(candidate) ? [clampDebugPoint(candidate)] : [];
       }),
     );
     if (candidates.length > 0) {

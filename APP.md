@@ -45,7 +45,7 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - `original AB union` controls the shaded exact covered-region fill.
 - `visible regions` checkboxes control which individual `R_i` fills contribute to the shaded overlays.
 - `hex-axis hull` shows the hull overlay and uses it for the sampled mask. It replaces each row with `a_i+b_i < 1` by a hex-axis hull using adjacent-edge boundary hits. Near `a_i+b_i=1`, it adds local top-start/top-end cuts to reduce the upper/right excess while preserving sampled containment.
-- `show purple triangle` toggles the sampled enclosing equilateral triangle for the current `theta`.
+- `show purple triangle` toggles the sampled enclosing equilateral triangle. `auto optimize theta` updates it to the sampled best angle after completed AB changes; disabling auto restores the manual theta slider and optimize button.
 - `show red pair > 1` continuously searches the red uncovered region for a sampled pair farther than distance `1` and draws the witness when found.
 - `clip to corner sectors` clips `R_i` to the sector bounded by the adjacent half-diagonals; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
 - The center dropdown can show no center shape, the draggable C-triangle, the draggable C-circle, or the manual `c_i` convex hull. `lock center` freezes the active center geometry but still allows changing the center mode.
@@ -55,11 +55,11 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 
 ## `Hull debug` mode
 
-`Hull debug` is a diagnostic local view for sketching a desired hex-axis hull around one strict `R(a,b)` set. The default example is `a=0.20`, `b=0.50`.
+`Hull debug` is a diagnostic local view for inspecting one `R(a,b)` set and sketching a desired hex-axis hull when `a+b<1`. The default example is `a=0.20`, `b=0.50`.
 
-- The canvas shows local coordinates: `u` points from `V_i` to `V_{i+1}`, and `v` points from `V_i` to `V_{i-1}`.
+- The canvas shows the full local hexagon footprint in coordinates where `u` points from `V_i` to `V_{i+1}`, and `v` points from `V_i` to `V_{i-1}`.
 - The exact sampled AB-union set, required points, and adjacent-edge boundary hits are drawn as references.
-- `load suggested hull` replaces the current polygon with the code-generated hex-axis hull for the current `a,b`, then closes it for local editing.
+- `load suggested hull` replaces the current polygon with the code-generated hex-axis hull for strict rows with `a+b<1`; for `a+b>=1`, no suggested hull is shown.
 - Click to add polygon vertices. On a closed polygon, click an edge to insert a new dot on that edge.
 - Drag vertices to adjust them while preserving snapped edge directions where possible.
 - Select a dot and use `delete selected dot`, Backspace, or Delete to remove it while preserving local axis alignment.

@@ -105,6 +105,7 @@ import {
   deleteSelectedAbUnionFMark,
   optimizeAbUnionTheta,
   renderAbUnion,
+  requestAbUnionThetaOptimization,
   setAbUnionCoincidenceLock,
   setAbUnionFixedSum,
   setAbUnionLock,
@@ -2217,6 +2218,7 @@ function abUnionOverlayLabel(): string {
 
 function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const thetaDeg = abUnionState.theta * 180 / Math.PI;
+  const thetaManualDisabled = abUnionState.autoOptimizeTheta ? ' disabled' : '';
   const lastOptimized = abUnionState.lastOptimized
     ? `best L*=${abUnionState.lastOptimized.L.toFixed(5)} at ${formatAbUnionDegrees(abUnionState.lastOptimized.theta)}`
     : 'best L*: not optimized';
@@ -2303,6 +2305,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <label><input type="checkbox" data-ab-show-original${abUnionState.showOriginalRegion ? ' checked' : ''}/>original AB union</label>
       <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
+      <label><input type="checkbox" data-ab-auto-theta${abUnionState.autoOptimizeTheta ? ' checked' : ''}/>auto optimize theta</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
       <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
@@ -2332,10 +2335,10 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </div>
     <div class="ab-union-row">
       <label for="ab-union-theta">theta = <span>${thetaDeg.toFixed(1)} deg</span></label>
-      <input id="ab-union-theta" type="range" min="0" max="120" step="0.5" value="${thetaDeg.toFixed(1)}" data-ab-theta/>
+      <input id="ab-union-theta" type="range" min="0" max="120" step="0.5" value="${thetaDeg.toFixed(1)}" data-ab-theta${thetaManualDisabled}/>
     </div>
     <div class="ab-union-toolbar">
-      <button type="button" class="free-button" data-ab-optimize>optimize theta</button>
+      <button type="button" class="free-button" data-ab-optimize${thetaManualDisabled}>optimize theta</button>
     </div>
     <div class="ab-union-readout">
       <span>L(theta)</span><strong>${result.currentL.toFixed(5)}</strong>
@@ -2350,6 +2353,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
       <span>compute model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
       <span>visible overlays</span><strong>${escapeHtml(abUnionOverlayLabel())}</strong>
+      <span>theta mode</span><strong>${abUnionState.autoOptimizeTheta ? 'auto' : 'manual'}</strong>
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
@@ -2379,17 +2383,18 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
       : `misses ${result.missedCount} of ${result.sampleCount}`
     : `${result.sampleCount} exact samples; polygon open`;
   const exportCount = abHullDebugState.exports.length;
+  const noSuggestedHull = abHullDebugState.a + abHullDebugState.b >= 1 - 1e-9;
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
       <label>a
-        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
+        <input type="range" min="0" max="1" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
       <label>b
-        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
+        <input type="range" min="0" max="1" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
       <span class="free-small-status">a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}</span>
     </div>
     <div class="ab-union-toolbar">
@@ -2397,7 +2402,7 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
       <button type="button" class="free-button" data-hull-debug-undo${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>undo</button>
       <button type="button" class="free-button" data-hull-debug-delete${abHullDebugState.selectedIndex !== null && (!abHullDebugState.closed || abHullDebugState.vertices.length > 3) ? '' : ' disabled'}>delete selected dot</button>
       <button type="button" class="free-button" data-hull-debug-clear${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>clear</button>
-      <button type="button" class="free-button" data-hull-debug-suggested>load suggested hull</button>
+      <button type="button" class="free-button" data-hull-debug-suggested${noSuggestedHull ? ' disabled' : ''}>load suggested hull</button>
       <button type="button" class="free-button" data-hull-debug-reset>reset example</button>
     </div>
     <div class="ab-union-toolbar">
@@ -2646,7 +2651,7 @@ function render(): void {
     currentAbHullDebugResult = result;
 
     gammaValues.textContent = `hull debug: a=${abHullDebugState.a.toFixed(3)}, b=${abHullDebugState.b.toFixed(3)}, a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}`;
-    localCBounds.textContent = 'local view: u along V_i to V_{i+1}, v along V_i to V_{i-1}';
+    localCBounds.textContent = 'local view: full hex footprint in u,v coordinates';
     localCValues.textContent = result.closed
       ? result.missedCount === 0
         ? 'drawn polygon contains sampled exact set'
@@ -3272,8 +3277,10 @@ abUnionControls.addEventListener('click', async (event) => {
     return;
   }
   if (target.dataset.abOptimize !== undefined) {
+    if (abUnionState.autoOptimizeTheta) return;
     abUnionState.lastOptimized = optimizeAbUnionTheta(abUnionState);
     abUnionState.theta = abUnionState.lastOptimized.theta;
+    abUnionState.thetaOptimizationPending = false;
     render();
     return;
   }
@@ -3289,6 +3296,7 @@ abUnionControls.addEventListener('input', (event) => {
     return;
   }
   if (target.dataset.abTheta !== undefined) {
+    if (abUnionState.autoOptimizeTheta) return;
     abUnionState.theta = Math.max(0, Math.min(120, Number(target.value))) * Math.PI / 180;
     abUnionState.lastOptimized = null;
     render();
@@ -3307,6 +3315,14 @@ abUnionControls.addEventListener('change', (event) => {
     render();
     return;
   }
+  if (target instanceof HTMLInputElement && target.dataset.abAutoTheta !== undefined) {
+    abUnionState.autoOptimizeTheta = target.checked;
+    if (target.checked) {
+      requestAbUnionThetaOptimization(abUnionState);
+    }
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.abShowFarPair !== undefined) {
     abUnionState.showFarPair = target.checked;
     render();
@@ -3314,13 +3330,13 @@ abUnionControls.addEventListener('change', (event) => {
   }
   if (target instanceof HTMLInputElement && target.dataset.abClipSectors !== undefined) {
     abUnionState.clipToCornerSectors = target.checked;
-    abUnionState.lastOptimized = null;
+    requestAbUnionThetaOptimization(abUnionState);
     render();
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.abAxisHull !== undefined) {
     abUnionState.useAxisAlignedHull = target.checked;
-    abUnionState.lastOptimized = null;
+    requestAbUnionThetaOptimization(abUnionState);
     render();
     return;
   }
@@ -3377,7 +3393,7 @@ abUnionControls.addEventListener('change', (event) => {
     const value = target.value;
     if (value === 'coarse' || value === 'high' || value === 'adaptive') {
       abUnionState.quality = value as AbUnionQuality;
-      abUnionState.lastOptimized = null;
+      requestAbUnionThetaOptimization(abUnionState);
       render();
     }
   }
