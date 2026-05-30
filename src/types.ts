@@ -16,6 +16,8 @@ export type ShapeMode =
   | 'free'
   | 'ab-union'
   | 'ab-hull-debug'
+  | 'max-area'
+  | 'area-conj'
   | 'conj-0521'
   | 'conj-0525';
 

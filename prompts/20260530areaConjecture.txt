@@ -1,0 +1,28 @@
+Area conj: a+b>1인게 2개 이상 있을때 증명방법 
+요약: 밖으로 튀어나가는 넓이가 삼각형 하나 넓이보다 많을거같다
+f: [0,1]^2 -> [0,1]
+f(a,b) = a, b 점들을 포함하는 unit 정삼각형 중에 hexagon과 intersect하는 넓이가 가장 큰 삼각형의 넓이 (삼각형 1개 넓이를 1이라고 생각) 
+a_i+b_i+1 = 1 로 constraint 줘서 육각형 둘레에 6개 점 찍었을때
+f(a0,b0)+f(a1,b1)+...+f(a5,b5) < 6 일 것 같다
+
+based on this conjecture, build two new modes
+mode 1:
+name: Max Area
+what it does: I can drag values of a, b using the same codes in hull debug mode.
+For given values of a,b, compute f(a,b) numerically and show the triangle that realizes f(a,b). also show 1-f(a,b)
+
+mode 2:
+name: Area Conj
+what it does: I can drag 6 points on hexagon boundary just like ab union mode.
+I have same tools as in ab union mode. move, add, delete, d mark, s mark, f mark
+but i don't compute any enclosing triangle.
+the left side shows the triangles that realizes each f(ai,bi)
+we can do same a_i, b_i, same a_i+b_i all same as ab union mode.
+and right panel also shows each f(ai,bi) and 1-f(ai,bi) and each sum.
+
+when implementing, reuse existing functions as much as you can.
+if a function is used in different tools, then make a code file that contains does util or geometry functions, and import from them.
+
+think and talk in english.
+suggest additional things that might need.
+ask me questions to make everything rigorous

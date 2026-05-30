@@ -174,6 +174,20 @@ interface AbUnionRenderOptions {
   computeTheta?: boolean;
 }
 
+export interface AbUnionBoundaryRenderResult {
+  fMarkCount: number;
+  fMarkDistance: number | null;
+  fMarkTriangleSide: number | null;
+  edgeRows: AbUnionEdgeRow[];
+  regionRows: AbUnionRegionRow[];
+  activeLabel: string;
+}
+
+interface AbUnionInteractionCallbacks {
+  onPreviewChange?: () => void;
+  onCommitChange?: () => void;
+}
+
 interface MaskCache {
   size: number;
   center: number;
@@ -2637,6 +2651,29 @@ export function renderAbUnion(
   };
 }
 
+export function renderAbUnionBoundaryControls(
+  ctx: CanvasRenderingContext2D,
+  state: AbUnionState,
+  options: { showFMarkTriangle?: boolean } = {},
+): AbUnionBoundaryRenderResult {
+  normalizeAbUnionState(state);
+  enforceAbUnionLocks(state);
+  const currentFMarkDistance = fMarkDistance(state);
+  const currentFMarkTriangle = options.showFMarkTriangle === false ? null : fMarkTriangle(state);
+  drawPointsAndVertices(ctx, state);
+  drawFMarkDistance(ctx, state, currentFMarkDistance);
+  drawFMarkOverlay(ctx, state, currentFMarkTriangle);
+
+  return {
+    fMarkCount: state.fMarks.length,
+    fMarkDistance: currentFMarkDistance,
+    fMarkTriangleSide: currentFMarkTriangle?.side ?? null,
+    edgeRows: edgeRowsForState(state),
+    regionRows: regionRowsForState(state),
+    activeLabel: activeLabel(state.activeRegions),
+  };
+}
+
 function getHitScale(pointerType: string): number {
   if (pointerType === 'touch') return TOUCH_HIT_SCALE;
   if (pointerType === 'pen') return PEN_HIT_SCALE;
@@ -2959,6 +2996,7 @@ export function setupAbUnionInteraction(
   getLocalCs: () => number[],
   onLocalCChange: (index: number, value: number) => void,
   render: () => void,
+  callbacks: AbUnionInteractionCallbacks = {},
 ): void {
   let interaction: PointerInteraction = { kind: 'idle' };
   let activePointerId: number | null = null;
@@ -3018,12 +3056,14 @@ export function setupAbUnionInteraction(
     if (state.tool === 'add' && (hit?.kind === 'edge' || hit?.kind === 'dot')) {
       const edgeIndex = hit.kind === 'edge' ? hit.index : hit.dot.edge;
       addEdgeDot(state, edgeIndex, projectEdgeValue(mouse, edgeIndex));
+      callbacks.onCommitChange?.();
       render();
       event.preventDefault();
       return;
     }
     if (state.tool === 'delete' && hit?.kind === 'dot') {
       deleteEdgeDot(state, hit.dot);
+      callbacks.onCommitChange?.();
       render();
       event.preventDefault();
       return;
@@ -3032,6 +3072,7 @@ export function setupAbUnionInteraction(
     if (state.tool === 'move' && hit?.kind === 'dot') {
       interaction = { kind: 'dragging-dot', dot: hit.dot, startMouse: mouse, moved: false };
       setDotValue(state, hit.dot, projectEdgeValue(mouse, hit.dot.edge));
+      callbacks.onPreviewChange?.();
       render();
     } else if (hit?.kind === 'local-c') {
       interaction = { kind: 'dragging-local-c', index: hit.index };
@@ -3102,6 +3143,7 @@ export function setupAbUnionInteraction(
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
       setDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
+      callbacks.onPreviewChange?.();
     } else if (interaction.kind === 'dragging-f-mark') {
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
@@ -3155,9 +3197,11 @@ export function setupAbUnionInteraction(
       render();
     } else if (interaction.kind === 'dragging-dot' && !interaction.moved) {
       handleClick(state, { kind: 'dot', dot: interaction.dot });
+      callbacks.onCommitChange?.();
       render();
     } else if (interaction.kind === 'dragging-dot' && interaction.moved) {
       requestAbUnionThetaOptimization(state);
+      callbacks.onCommitChange?.();
       render();
     }
 
