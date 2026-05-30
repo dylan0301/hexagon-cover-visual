@@ -20,6 +20,7 @@ const SQRT3 = Math.sqrt(3);
 const ANGLE_PERIOD = 2 * Math.PI / 3;
 const EPS = 1e-7;
 const EPS2 = 1e-12;
+const ONE_SUM_CONSTRAINT_TOLERANCE = 1e-4;
 const REGION_VERTEX_HIT_PX = 12;
 const POINT_HIT_PX = 14;
 const LOCAL_C_HIT_PX = 8;
@@ -47,6 +48,7 @@ export type AbUnionQuality = 'coarse' | 'high' | 'adaptive';
 export type AbUnionPreset = 'equality' | 'midpoint';
 export type AbUnionTool = 'move' | 'add' | 'delete' | 'd-mark' | 's-mark' | 'f-mark';
 export type AbUnionLockKind = 'a' | 'b';
+export type AbUnionSumConstraintMode = 'none' | 'current' | 'one' | 'one-plus-delta';
 export type AbUnionLabelMode = 'dynamic' | 'static';
 export type AbUnionCoincidenceRole = 'shared' | 'left' | 'right';
 export type AbUnionMarkSourceKind =
@@ -111,6 +113,7 @@ export interface AbUnionState {
   aLocked: boolean[];
   bLocked: boolean[];
   fixedSums: Array<number | null>;
+  sumConstraintModes: AbUnionSumConstraintMode[];
   activeRegions: boolean[];
   labels: AbUnionLabel[];
   selectedMarkSources: AbUnionMarkSourceRef[];
@@ -138,6 +141,7 @@ export interface AbUnionRegionRow {
   aLocked: boolean;
   bLocked: boolean;
   fixedSum: number | null;
+  sumConstraintMode: AbUnionSumConstraintMode;
   state: 'active' | 'limit' | 'empty';
 }
 
@@ -1826,6 +1830,18 @@ function normalizeFixedSums(value: unknown): Array<number | null> {
   });
 }
 
+function normalizeSumConstraintModes(value: unknown, fixedSums: Array<number | null>): AbUnionSumConstraintMode[] {
+  const validModes: AbUnionSumConstraintMode[] = ['none', 'current', 'one', 'one-plus-delta'];
+  return Array.from({ length: 6 }, (_, index) => {
+    if (fixedSums[index] === null) return 'none';
+    if (!Array.isArray(value)) return 'current';
+    const mode = value[index];
+    return typeof mode === 'string' && validModes.includes(mode as AbUnionSumConstraintMode)
+      ? mode as AbUnionSumConstraintMode
+      : 'current';
+  });
+}
+
 function normalizeMarkSource(value: unknown): AbUnionMarkSourceRef | null {
   if (!value || typeof value !== 'object') return null;
   const ref = value as Partial<AbUnionMarkSourceRef>;
@@ -1938,6 +1954,14 @@ function normalizeAbUnionState(state: AbUnionState): void {
   state.aLocked = normalizeLockArray(state.aLocked);
   state.bLocked = normalizeLockArray(state.bLocked);
   state.fixedSums = normalizeFixedSums(state.fixedSums);
+  state.sumConstraintModes = normalizeSumConstraintModes(state.sumConstraintModes, state.fixedSums);
+  for (let index = 0; index < 6; index++) {
+    if (state.sumConstraintModes[index] === 'none') {
+      state.fixedSums[index] = null;
+    } else if (state.sumConstraintModes[index] === 'one') {
+      state.fixedSums[index] = 1 - ONE_SUM_CONSTRAINT_TOLERANCE;
+    }
+  }
   state.activeRegions = normalizeLockArray(state.activeRegions);
   state.labels = normalizeLabels(state.labels);
   state.selectedMarkSources = Array.isArray(state.selectedMarkSources)
@@ -2423,19 +2447,52 @@ function enforceAbUnionLocks(state: AbUnionState): void {
 }
 
 export function setAbUnionFixedSum(state: AbUnionState, indexInput: number, fixed: boolean): void {
+  setAbUnionSumConstraint(state, indexInput, fixed ? 'current' : 'none', 0);
+}
+
+export function setAbUnionSumConstraint(
+  state: AbUnionState,
+  indexInput: number,
+  mode: AbUnionSumConstraintMode,
+  delta: number,
+): void {
   normalizeAbUnionState(state);
   const index = mod6(indexInput);
-  if (!fixed) {
+  if (mode === 'none') {
     state.fixedSums[index] = null;
+    state.sumConstraintModes[index] = 'none';
     requestAbUnionThetaOptimization(state);
     return;
   }
 
   const previousFixedSums = state.fixedSums.slice();
-  state.fixedSums[index] = aValue(state, index) + bValue(state, index);
+  const previousModes = state.sumConstraintModes.slice();
+  state.sumConstraintModes[index] = mode;
+  state.fixedSums[index] = mode === 'current'
+    ? aValue(state, index) + bValue(state, index)
+    : mode === 'one'
+      ? 1 - ONE_SUM_CONSTRAINT_TOLERANCE
+      : 1 + delta;
   if (!solveAbUnionConstraints(state, [])) {
     state.fixedSums = previousFixedSums;
+    state.sumConstraintModes = previousModes;
     state.status = `Cannot fix a${index}+b${index}: same-value and fixed-sum constraints conflict.`;
+    return;
+  }
+  requestAbUnionThetaOptimization(state);
+}
+
+export function refreshAbUnionDeltaConstraints(state: AbUnionState, delta: number): void {
+  normalizeAbUnionState(state);
+  const previousFixedSums = state.fixedSums.slice();
+  for (let index = 0; index < 6; index++) {
+    if (state.sumConstraintModes[index] === 'one-plus-delta') {
+      state.fixedSums[index] = 1 + delta;
+    }
+  }
+  if (!solveAbUnionConstraints(state, [])) {
+    state.fixedSums = previousFixedSums;
+    state.status = 'Cannot update delta: same-value and fixed-sum constraints conflict.';
     return;
   }
   requestAbUnionThetaOptimization(state);
@@ -2468,6 +2525,7 @@ function regionRowsForState(state: AbUnionState): AbUnionRegionRow[] {
       aLocked: Boolean(state.aLocked[index]),
       bLocked: Boolean(state.bLocked[index]),
       fixedSum: state.fixedSums[index],
+      sumConstraintMode: state.sumConstraintModes[index],
       state: rowState,
     };
   });
@@ -2505,6 +2563,7 @@ export function createDefaultAbUnionState(): AbUnionState {
     aLocked: Array(6).fill(false),
     bLocked: Array(6).fill(false),
     fixedSums: Array(6).fill(null),
+    sumConstraintModes: Array(6).fill('none'),
     activeRegions: Array(6).fill(false),
     labels: [],
     selectedMarkSources: [],

@@ -107,10 +107,11 @@ import {
   renderAbUnion,
   renderAbUnionBoundaryControls,
   requestAbUnionThetaOptimization,
+  refreshAbUnionDeltaConstraints,
   setAbUnionCoincidenceLock,
-  setAbUnionFixedSum,
   setAbUnionLock,
   setAbUnionPreset,
+  setAbUnionSumConstraint,
   setAbUnionTool,
   snapAbUnionLabelToEdge,
   setupAbUnionInteraction,
@@ -120,6 +121,7 @@ import {
   type AbUnionQuality,
   type AbUnionBoundaryRenderResult,
   type AbUnionRenderResult,
+  type AbUnionSumConstraintMode,
   type AbUnionTool,
 } from './abUnion';
 import {
@@ -242,6 +244,7 @@ let areaConjState = createDefaultAbUnionState();
 let conj0521State = createDefaultConj0521State();
 let conj0525State = createDefaultConj0525State();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
+let areaConstraintDelta = 0.0001;
 
 interface MaxAreaState {
   a: number;
@@ -249,6 +252,7 @@ interface MaxAreaState {
   quality: AreaConjQuality;
   result: AreaConjResult;
   dirty: boolean;
+  sumConstraintMode: AbUnionSumConstraintMode;
 }
 
 const maxAreaState: MaxAreaState = {
@@ -257,6 +261,7 @@ const maxAreaState: MaxAreaState = {
   quality: 'coarse',
   result: computeAreaConjResult(0, 0.2, 0.5, 'coarse'),
   dirty: false,
+  sumConstraintMode: 'none',
 };
 
 let areaConjQuality: AreaConjQuality = 'coarse';
@@ -2292,20 +2297,27 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark', 'f-mark'] as AbUnionTool[]).map((tool) => `
     <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
-  const regionRowsHtml = result.regionRows.map((row) => `
-    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
-      <td>R${row.index}</td>
-      <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
-      <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
-      <td><input type="checkbox" title="fix current a${row.index}+b${row.index}${row.fixedSum === null ? '' : ` = ${row.fixedSum.toFixed(4)}`}" data-ab-fixed-sum="${row.index}"${row.fixedSum !== null ? ' checked' : ''}/></td>
-      <td>${row.a.toFixed(4)}</td>
-      <td>${row.b.toFixed(4)}</td>
-      <td>${row.sum.toFixed(4)}</td>
-      <td>${row.distance.toFixed(4)}</td>
-      <td>${row.equality ? 'yes' : 'no'}</td>
-      <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
-    </tr>
-  `).join('');
+  const regionRowsHtml = result.regionRows.map((row) => {
+    const currentTitle = row.sumConstraintMode === 'current' && row.fixedSum !== null
+      ? `fix current a${row.index}+b${row.index} = ${row.fixedSum.toFixed(4)}`
+      : `fix current a${row.index}+b${row.index}`;
+    return `
+      <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
+        <td>R${row.index}</td>
+        <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="${currentTitle}" data-ab-sum-mode="current" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'current' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = 1" data-ab-sum-mode="one" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'one' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = ${formatAreaNumber(1 + areaConstraintDelta)}" data-ab-sum-mode="one-plus-delta" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/></td>
+        <td>${row.a.toFixed(4)}</td>
+        <td>${row.b.toFixed(4)}</td>
+        <td>${row.sum.toFixed(4)}</td>
+        <td>${row.distance.toFixed(4)}</td>
+        <td>${row.equality ? 'yes' : 'no'}</td>
+        <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
+      </tr>
+    `;
+  }).join('');
   const edgeRowsHtml = result.edgeRows.map((row) => `
     <tr>
       <td>e${row.index}</td>
@@ -2367,6 +2379,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-preset="equality">equality</button>
       <button type="button" class="free-button" data-ab-preset="midpoint">midpoints</button>
+      ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-row">
       <label for="ab-union-theta">theta = <span>${thetaDeg.toFixed(1)} deg</span></label>
@@ -2402,7 +2415,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </table>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix a+b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
   `;
@@ -2499,10 +2512,18 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
 
 const AREA_PARAM_STEP = '0.000001';
 const AREA_WHEEL_STEP = 0.001;
+const AREA_DELTA_STEP = '0.0001';
+const AREA_DELTA_MIN = 0.000001;
+const AREA_DELTA_MAX = 0.159999;
+const AREA_ONE_SUM_CONSTRAINT_TOLERANCE = 1e-4;
 const AREA_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 function isAreaQuality(value: string): value is AreaConjQuality {
   return value === 'coarse' || value === 'high';
+}
+
+function isAreaSumConstraintMode(value: string | undefined): value is AbUnionSumConstraintMode {
+  return value === 'none' || value === 'current' || value === 'one' || value === 'one-plus-delta';
 }
 
 function isMaxAreaParam(value: string | undefined): value is 'a' | 'b' {
@@ -2511,6 +2532,68 @@ function isMaxAreaParam(value: string | undefined): value is 'a' | 'b' {
 
 function formatAreaNumber(value: number): string {
   return value.toFixed(6);
+}
+
+function clampAreaDelta(value: number): number {
+  if (!Number.isFinite(value)) return areaConstraintDelta;
+  return Math.max(AREA_DELTA_MIN, Math.min(AREA_DELTA_MAX, value));
+}
+
+function areaSumTarget(mode: AbUnionSumConstraintMode): number | null {
+  if (mode === 'one') return 1 - AREA_ONE_SUM_CONSTRAINT_TOLERANCE;
+  if (mode === 'one-plus-delta') return 1 + areaConstraintDelta;
+  return null;
+}
+
+function areaSumModeText(mode: AbUnionSumConstraintMode): string {
+  if (mode === 'current') return 'current';
+  if (mode === 'one') return 'a+b=1';
+  if (mode === 'one-plus-delta') return `a+b=${formatAreaNumber(1 + areaConstraintDelta)}`;
+  return 'off';
+}
+
+function areaDeltaControlHtml(): string {
+  return `
+    <label>delta
+      <input class="ab-hull-debug-number" type="number" min="${AREA_DELTA_MIN}" max="${AREA_DELTA_MAX}" step="${AREA_DELTA_STEP}" value="${formatAreaNumber(areaConstraintDelta)}" data-area-delta/>
+    </label>
+  `;
+}
+
+function setAreaConstraintDelta(rawValue: number): boolean {
+  if (!Number.isFinite(rawValue)) return false;
+  areaConstraintDelta = clampAreaDelta(rawValue);
+  refreshAbUnionDeltaConstraints(abUnionState, areaConstraintDelta);
+  refreshAbUnionDeltaConstraints(areaConjState, areaConstraintDelta);
+  if (maxAreaState.sumConstraintMode === 'one-plus-delta') {
+    applyMaxAreaSumConstraint('a');
+    recomputeMaxArea();
+  }
+  if (areaConjState.sumConstraintModes.includes('one-plus-delta')) {
+    markAreaConjDirty();
+    recomputeAreaConjResults();
+  }
+  return true;
+}
+
+function applyAreaDeltaInput(target: HTMLInputElement): boolean {
+  if (target.dataset.areaDelta === undefined) return false;
+  const updated = setAreaConstraintDelta(Number(target.value));
+  target.value = formatAreaNumber(areaConstraintDelta);
+  return updated;
+}
+
+function clampAreaPartForTarget(value: number, target: number): number {
+  return Math.max(Math.max(0, target - 1), Math.min(Math.min(1, target), value));
+}
+
+function applyMaxAreaSumConstraint(preserve: 'a' | 'b'): void {
+  const target = areaSumTarget(maxAreaState.sumConstraintMode);
+  if (target === null) return;
+  const preserved = clampAreaPartForTarget(maxAreaState[preserve], target);
+  maxAreaState[preserve] = preserved;
+  maxAreaState[preserve === 'a' ? 'b' : 'a'] = clamp01(target - preserved);
+  maxAreaState.dirty = true;
 }
 
 function applyMaxAreaParameterInput(target: HTMLInputElement, commit: boolean): boolean {
@@ -2522,11 +2605,24 @@ function applyMaxAreaParameterInput(target: HTMLInputElement, commit: boolean): 
 
 function setMaxAreaParameter(key: 'a' | 'b', rawValue: number, commit: boolean): void {
   if (!Number.isFinite(rawValue)) return;
-  maxAreaState[key] = clamp01(rawValue);
+  const target = areaSumTarget(maxAreaState.sumConstraintMode);
+  if (target === null) {
+    maxAreaState[key] = clamp01(rawValue);
+  } else {
+    const value = clampAreaPartForTarget(rawValue, target);
+    maxAreaState[key] = value;
+    maxAreaState[key === 'a' ? 'b' : 'a'] = clamp01(target - value);
+  }
   maxAreaState.dirty = true;
   if (commit) {
     recomputeMaxArea();
   }
+}
+
+function setMaxAreaSumConstraint(mode: AbUnionSumConstraintMode): void {
+  maxAreaState.sumConstraintMode = mode === 'current' ? 'none' : mode;
+  applyMaxAreaSumConstraint('a');
+  recomputeMaxArea();
 }
 
 function recomputeMaxArea(): void {
@@ -2636,7 +2732,7 @@ function renderMaxAreaCanvasAndReadouts(): void {
   localCBounds.textContent = `f(a,b)=${formatAreaNumber(maxAreaState.result.f)}, 1-f=${formatAreaNumber(maxAreaState.result.deficit)}`;
   localCValues.textContent = maxAreaState.dirty
     ? 'stale: recompute after commit'
-    : `quality=${maxAreaState.quality}, evaluations=${maxAreaState.result.evaluations}`;
+    : `quality=${maxAreaState.quality}, constraint=${areaSumModeText(maxAreaState.sumConstraintMode)}, evaluations=${maxAreaState.result.evaluations}`;
   ceStatus.textContent = 'Max Area: CE/g-chain inactive';
   ceStatus.style.color = '#475569';
   ceChainStatus.textContent = maxAreaState.result.feasible ? 'realizing triangle found' : 'infeasible; using f=0';
@@ -2654,6 +2750,7 @@ function renderMaxAreaPanel(): void {
   const triangleText = result.triangle
     ? `center=(${result.triangle.center.x.toFixed(4)}, ${result.triangle.center.y.toFixed(4)}), theta=${(result.triangle.phi * 180 / Math.PI).toFixed(2)} deg`
     : 'none';
+  const constraintText = areaSumModeText(maxAreaState.sumConstraintMode);
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
@@ -2673,11 +2770,19 @@ function renderMaxAreaPanel(): void {
       </label>
       <button type="button" class="free-button" data-max-area-recompute${maxAreaState.dirty ? '' : ' disabled'}>recompute</button>
     </div>
+    <div class="ab-union-toolbar">
+      <span>sum constraint</span>
+      <label><input type="checkbox" data-max-area-sum-mode="one"${maxAreaState.sumConstraintMode === 'one' ? ' checked' : ''}/>a+b=1</label>
+      <label><input type="checkbox" data-max-area-sum-mode="one-plus-delta"${maxAreaState.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/>a+b=1+delta</label>
+      ${areaDeltaControlHtml()}
+    </div>
     <div class="ab-union-readout">
       <span>status</span><strong><span class="${statusClass}">${escapeHtml(status)}</span></strong>
       <span>a</span><strong>${formatAreaNumber(maxAreaState.a)}</strong>
       <span>b</span><strong>${formatAreaNumber(maxAreaState.b)}</strong>
       <span>a+b</span><strong>${formatAreaNumber(maxAreaState.a + maxAreaState.b)}</strong>
+      <span>constraint</span><strong>${escapeHtml(constraintText)}</strong>
+      <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
       <span>f(a,b)</span><strong>${formatAreaNumber(result.f)}</strong>
       <span>1-f(a,b)</span><strong>${formatAreaNumber(result.deficit)}</strong>
       <span>quality</span><strong>${escapeHtml(maxAreaState.quality)}</strong>
@@ -2717,12 +2822,17 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
   const regionRowsHtml = boundary.regionRows.map((row) => {
     const result = areaConjResults[row.index];
     const feasibleClass = result?.feasible ? 'active' : 'empty';
+    const currentTitle = row.sumConstraintMode === 'current' && row.fixedSum !== null
+      ? `fix current a${row.index}+b${row.index} = ${row.fixedSum.toFixed(4)}`
+      : `fix current a${row.index}+b${row.index}`;
     return `
       <tr class="${areaConjState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.sum > 1 + 1e-9 ? ' ab-union-equality-row' : ''}">
         <td>R${row.index}</td>
         <td><input type="checkbox" title="include a${row.index} in the same-a group" data-area-lock-kind="a" data-area-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
         <td><input type="checkbox" title="include b${row.index} in the same-b group" data-area-lock-kind="b" data-area-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
-        <td><input type="checkbox" title="fix current a${row.index}+b${row.index}${row.fixedSum === null ? '' : ` = ${row.fixedSum.toFixed(4)}`}" data-area-fixed-sum="${row.index}"${row.fixedSum !== null ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="${currentTitle}" data-area-sum-mode="current" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'current' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = 1" data-area-sum-mode="one" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'one' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = ${formatAreaNumber(1 + areaConstraintDelta)}" data-area-sum-mode="one-plus-delta" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/></td>
         <td>${row.a.toFixed(4)}</td>
         <td>${row.b.toFixed(4)}</td>
         <td>${row.sum.toFixed(4)}</td>
@@ -2762,6 +2872,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       <button type="button" class="free-button" data-area-recompute${areaConjDirty ? '' : ' disabled'}>recompute f</button>
       <button type="button" class="free-button" data-area-preset="equality">equality</button>
       <button type="button" class="free-button" data-area-preset="midpoint">midpoints</button>
+      ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-readout">
       <span>status</span><strong><span class="${staleClass}">${escapeHtml(staleText)}</span></strong>
@@ -2771,12 +2882,13 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       <span>infeasible rows</span><strong>${infeasibleCount}</strong>
       <span>active boundaries</span><strong>${escapeHtml(boundary.activeLabel)}</strong>
       <span>quality</span><strong>${escapeHtml(areaConjQuality)}</strong>
+      <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
       <span>f marks</span><strong>${escapeHtml(areaConjFMarkText(boundary))}</strong>
     </div>
     <div class="free-row"><span>${escapeHtml(areaConjState.status)}</span></div>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix a+b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
     <div class="ab-union-section-title">edge dots</div>
@@ -3802,6 +3914,11 @@ abUnionControls.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
+  if (applyAreaDeltaInput(target)) {
+    render();
+    event.preventDefault();
+    return;
+  }
   if (applyMaxAreaParameterInput(target, true)) {
     render();
     event.preventDefault();
@@ -3839,8 +3956,20 @@ abUnionControls.addEventListener('wheel', (event) => {
 
 abUnionControls.addEventListener('change', (event) => {
   const target = event.target;
+  if (target instanceof HTMLInputElement && applyAreaDeltaInput(target)) {
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && applyMaxAreaParameterInput(target, true)) {
     render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.maxAreaSumMode !== undefined) {
+    const mode = target.checked ? target.dataset.maxAreaSumMode : 'none';
+    if (isAreaSumConstraintMode(mode)) {
+      setMaxAreaSumConstraint(mode);
+      render();
+    }
     return;
   }
   if (target instanceof HTMLSelectElement && target.dataset.maxAreaQuality !== undefined) {
@@ -3860,10 +3989,13 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.areaFixedSum !== undefined) {
-    const index = Number(target.dataset.areaFixedSum);
+  if (target instanceof HTMLInputElement && target.dataset.areaSumMode !== undefined) {
+    const index = Number(target.dataset.areaSumIndex);
+    const mode = target.checked ? target.dataset.areaSumMode : 'none';
     if (Number.isInteger(index) && index >= 0 && index < 6) {
-      setAbUnionFixedSum(areaConjState, index, target.checked);
+      if (isAreaSumConstraintMode(mode)) {
+        setAbUnionSumConstraint(areaConjState, index, mode, areaConstraintDelta);
+      }
       markAreaConjDirty();
       recomputeAreaConjResults();
       render();
@@ -3944,10 +4076,13 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.abFixedSum !== undefined) {
-    const index = Number(target.dataset.abFixedSum);
+  if (target instanceof HTMLInputElement && target.dataset.abSumMode !== undefined) {
+    const index = Number(target.dataset.abSumIndex);
+    const mode = target.checked ? target.dataset.abSumMode : 'none';
     if (Number.isInteger(index) && index >= 0 && index < 6) {
-      setAbUnionFixedSum(abUnionState, index, target.checked);
+      if (isAreaSumConstraintMode(mode)) {
+        setAbUnionSumConstraint(abUnionState, index, mode, areaConstraintDelta);
+      }
       render();
     }
     return;

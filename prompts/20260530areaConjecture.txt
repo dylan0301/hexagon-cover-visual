@@ -26,3 +26,13 @@ if a function is used in different tools, then make a code file that contains do
 think and talk in english.
 suggest additional things that might need.
 ask me questions to make everything rigorous
+
+in the max area mode,
+add checkbox to constraint a+b=1, and checkbox for constraint a+b=1+delta. we can adjust value of 0< delta < 0.16
+also add the same checkboxes for ab union and Area Conj panel on each row for each triangle.
+ask me questions
+
+for computation issues, when we add constraint a+b=1, actually make it a+b=1 - tolerance. default tolerance 1e-9.
+don't make it interface, make it variable hard coded
+
+make tolerance 1e-4
