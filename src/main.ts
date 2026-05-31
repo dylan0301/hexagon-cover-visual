@@ -244,7 +244,7 @@ let areaConjState = createDefaultAbUnionState();
 let conj0521State = createDefaultConj0521State();
 let conj0525State = createDefaultConj0525State();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
-let areaConstraintDelta = 0.0001;
+let areaConstraintDelta = 0.000001;
 
 interface MaxAreaState {
   a: number;
@@ -2515,7 +2515,7 @@ const AREA_WHEEL_STEP = 0.001;
 const AREA_DELTA_STEP = '0.0001';
 const AREA_DELTA_MIN = 0.000001;
 const AREA_DELTA_MAX = 0.159999;
-const AREA_ONE_SUM_CONSTRAINT_TOLERANCE = 1e-4;
+const AREA_ONE_SUM_CONSTRAINT_TOLERANCE = 1e-12;
 const AREA_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 function isAreaQuality(value: string): value is AreaConjQuality {

@@ -36,3 +36,17 @@ for computation issues, when we add constraint a+b=1, actually make it a+b=1 - t
 don't make it interface, make it variable hard coded
 
 make tolerance 1e-4
+
+when a+b<=1, when finding the T(a,b) triangle, always try axis aligned triangles.
+I see some computational issues and the max area mode doesn't find the correct axis aligned trianlge.
+T(a,b) 를 f(a,b)를 realize하는 unit 정삼각형이라고 할때
+T(a,b) = 
+a+b<=1 일때: axis aligned 삼각형, WLOG a<=b라고 하면 b 점이 위치한 육각형 edge와 삼각형 한 변이 같은 직선
+a+b>1 일떄: 삼각형의 한 꼭짓점이 a점 또는 b점 위에 있음 (예전 이름으로는 Type 2 삼각형)
+this is my conjecture.
+then make tolerance 1e-6.
+think and talk in english.
+ask me questions.
+
+change default delta to 1e-6
+change a+b=1 tolerance to 1e-12
