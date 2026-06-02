@@ -118,6 +118,10 @@ function readTValues(state: AbUnionState): number[] {
   });
 }
 
+function hasSplitEdgeDots(state: AbUnionState): boolean {
+  return state.edgeDots?.some((edge) => edge?.split) ?? false;
+}
+
 function writeTValues(state: AbUnionState, t: number[]): void {
   state.edgeDots = Array.from({ length: 6 }, (_, index) => {
     const value = clamp01(t[index] ?? 0.5);
@@ -131,11 +135,11 @@ function enforceConjCommonState(
   defaultActiveRegions: boolean[],
 ): void {
   state.fixedSums = fixedSums.slice();
+  state.sumConstraintModes = fixedSums.map((sum) => sum === null ? 'none' : 'current');
   state.aLocked = Array(6).fill(false);
   state.bLocked = Array(6).fill(false);
   state.centerMode = 'none';
   state.centerLocked = false;
-  state.tool = 'move';
   state.showThetaTriangle = false;
   state.showFarPair = false;
   state.showOriginalRegion = true;
@@ -171,19 +175,21 @@ export function enforceConj0521Constraints(state: AbUnionState): void {
 }
 
 export function enforceConj0525Constraints(state: AbUnionState): void {
-  const t = readTValues(state);
-  let t2 = clamp01((t[2] + t[3]) / 2);
-  let t4 = clamp01((t[4] + t[5]) / 2);
+  if (!hasSplitEdgeDots(state)) {
+    const t = readTValues(state);
+    let t2 = clamp01((t[2] + t[3]) / 2);
+    let t4 = clamp01((t[4] + t[5]) / 2);
 
-  if (t4 - t2 < STRICT_GAP) {
-    const center = clamp((t2 + t4) / 2, STRICT_GAP / 2, 1 - STRICT_GAP / 2);
-    t2 = center - STRICT_GAP / 2;
-    t4 = center + STRICT_GAP / 2;
+    if (t4 - t2 < STRICT_GAP) {
+      const center = clamp((t2 + t4) / 2, STRICT_GAP / 2, 1 - STRICT_GAP / 2);
+      t2 = center - STRICT_GAP / 2;
+      t4 = center + STRICT_GAP / 2;
+    }
+
+    const t0 = clamp(t[0], t2, t4);
+    const t1 = clamp(t[1], t2, t0);
+    writeTValues(state, [t0, t1, t2, t2, t4, t4]);
   }
-
-  const t0 = clamp(t[0], t2, t4);
-  const t1 = clamp(t[1], t2, t0);
-  writeTValues(state, [t0, t1, t2, t2, t4, t4]);
 
   enforceConjCommonState(state, [null, null, null, 1, null, 1], [true, true, true, false, true, false]);
 }

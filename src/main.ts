@@ -121,6 +121,7 @@ import {
   type AbUnionQuality,
   type AbUnionBoundaryRenderResult,
   type AbUnionRenderResult,
+  type AbUnionState,
   type AbUnionSumConstraintMode,
   type AbUnionTool,
 } from './abUnion';
@@ -2905,7 +2906,23 @@ function countWord(count: number): string {
   return count.toString();
 }
 
-function renderConjPanel(result: Conj0521RenderResult, constraintsTitle: string): void {
+function renderConjPanel(
+  result: Conj0521RenderResult,
+  constraintsTitle: string,
+  boundaryState: AbUnionState | null = null,
+): void {
+  const boundaryToolControls = boundaryState
+    ? (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
+      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj0525-tool="${tool}">${areaConjToolText(tool)}</button>
+    `).join('')
+    : '';
+  const boundaryToolbar = boundaryState ? `
+    <div class="ab-union-toolbar">
+      <span>tool</span>
+      ${boundaryToolControls}
+    </div>
+    <div class="free-row"><span>${escapeHtml(boundaryState.status)}</span></div>
+  ` : '';
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -2924,6 +2941,14 @@ function renderConjPanel(result: Conj0521RenderResult, constraintsTitle: string)
       <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
     </tr>
   `).join('');
+  const edgeRowsHtml = boundaryState ? result.base.edgeRows.map((row) => `
+    <tr>
+      <td>e${row.index}</td>
+      <td>${row.split ? 'two' : 'one'}</td>
+      <td>${row.left.toFixed(4)}</td>
+      <td>${row.right.toFixed(4)}</td>
+    </tr>
+  `).join('') : '';
   const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
   const sideClass = result.triangle && result.triangle.side <= 1
     ? 'ab-union-ok'
@@ -2931,6 +2956,7 @@ function renderConjPanel(result: Conj0521RenderResult, constraintsTitle: string)
   const pointCount = result.points.length;
 
   abUnionControls.innerHTML = `
+    ${boundaryToolbar}
     <div class="ab-union-readout">
       <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
@@ -2942,6 +2968,13 @@ function renderConjPanel(result: Conj0521RenderResult, constraintsTitle: string)
       <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
       <tbody>${rowHtml}</tbody>
     </table>
+    ${boundaryState ? `
+      <div class="ab-union-section-title">edge dots</div>
+      <table class="ab-union-table">
+        <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+        <tbody>${edgeRowsHtml}</tbody>
+      </table>
+    ` : ''}
     <div class="ab-union-section-title">${countWord(pointCount)} points</div>
     <table class="ab-union-table">
       <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
@@ -3253,7 +3286,7 @@ function render(): void {
     coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConjPanel(result, '0525 constraints');
+    renderConjPanel(result, '0525 constraints', conj0525State);
     syncControllerSnapshot();
     return;
   }
@@ -3806,6 +3839,12 @@ abUnionControls.addEventListener('click', async (event) => {
   const areaTool = target.dataset.areaTool;
   if (areaTool === 'move' || areaTool === 'add' || areaTool === 'delete' || areaTool === 'f-mark') {
     setAbUnionTool(areaConjState, areaTool);
+    render();
+    return;
+  }
+  const conj0525Tool = target.dataset.conj0525Tool;
+  if (conj0525Tool === 'move' || conj0525Tool === 'add' || conj0525Tool === 'delete') {
+    setAbUnionTool(conj0525State, conj0525Tool);
     render();
     return;
   }
