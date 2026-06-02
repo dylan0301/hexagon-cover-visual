@@ -144,9 +144,13 @@ import {
 import {
   createDefaultConj0521State,
   createDefaultConj0525State,
+  moveConj0521Dot,
+  moveConj0525Dot,
   renderConj0521,
   renderConj0525,
+  type Conj0521Options,
   type Conj0521RenderResult,
+  type Conj0525Options,
 } from './conj0521';
 import {
   areaConjRequiredPoints,
@@ -244,6 +248,8 @@ let abHullDebugState = createDefaultAbHullDebugState();
 let areaConjState = createDefaultAbUnionState();
 let conj0521State = createDefaultConj0521State();
 let conj0525State = createDefaultConj0525State();
+let conj0521Options: Conj0521Options = { hardLimitDrag: false };
+let conj0525Options: Conj0525Options = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
 
@@ -2906,23 +2912,49 @@ function countWord(count: number): string {
   return count.toString();
 }
 
+function conj0525ConstraintSummary(): string {
+  const r3 = conj0525Options.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
+  const r5 = conj0525Options.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
+  return `0525 slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
+}
+
+function hasConj0525Options(options: Conj0521Options | Conj0525Options): options is Conj0525Options {
+  return 'forceSum3' in options && 'forceSum5' in options;
+}
+
 function renderConjPanel(
   result: Conj0521RenderResult,
   constraintsTitle: string,
   boundaryState: AbUnionState | null = null,
+  options: Conj0521Options | Conj0525Options | null = null,
+  mode: '0521' | '0525' | null = null,
 ): void {
-  const boundaryToolControls = boundaryState
+  const boundaryToolControls = boundaryState && mode
     ? (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
-      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj0525-tool="${tool}">${areaConjToolText(tool)}</button>
+      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj-tool-mode="${mode}" data-conj-tool="${tool}">${areaConjToolText(tool)}</button>
     `).join('')
     : '';
-  const boundaryToolbar = boundaryState ? `
+  const boundaryToolbar = boundaryState && mode ? `
     <div class="ab-union-toolbar">
       <span>tool</span>
       ${boundaryToolControls}
     </div>
     <div class="free-row"><span>${escapeHtml(boundaryState.status)}</span></div>
   ` : '';
+  const hardLimitControls = options && mode ? `
+    <div class="ab-union-toolbar">
+      <span>drag</span>
+      <label><input type="checkbox" data-conj-hard-limit="${mode}"${options.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
+    </div>
+  ` : '';
+  const forceControls = options && hasConj0525Options(options) ? `
+    <div class="ab-union-toolbar">
+      <span>force</span>
+      <label><input type="checkbox" data-conj0525-force-sum="3"${options.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
+      <label><input type="checkbox" data-conj0525-force-sum="5"${options.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
+    </div>
+  ` : '';
+  const optionControls = `${hardLimitControls}${forceControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -2957,6 +2989,7 @@ function renderConjPanel(
 
   abUnionControls.innerHTML = `
     ${boundaryToolbar}
+    ${optionControls}
     <div class="ab-union-readout">
       <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
@@ -3262,7 +3295,7 @@ function render(): void {
     coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConjPanel(result, '0521 constraints');
+    renderConjPanel(result, '0521 constraints', conj0521State, conj0521Options, '0521');
     syncControllerSnapshot();
     return;
   }
@@ -3272,10 +3305,10 @@ function render(): void {
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs);
+    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs, conj0525Options);
 
     gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
-    localCBounds.textContent = '0525 slice: a3+b3=a5+b5=1, a4+b4>1, a0+b0,a1+b1,a2+b2<=1';
+    localCBounds.textContent = conj0525ConstraintSummary();
     localCValues.textContent = result.triangle
       ? `5-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
       : `5-point side unavailable: ${result.status}`;
@@ -3286,7 +3319,7 @@ function render(): void {
     coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConjPanel(result, '0525 constraints', conj0525State);
+    renderConjPanel(result, '0525 constraints', conj0525State, conj0525Options, '0525');
     syncControllerSnapshot();
     return;
   }
@@ -3842,9 +3875,10 @@ abUnionControls.addEventListener('click', async (event) => {
     render();
     return;
   }
-  const conj0525Tool = target.dataset.conj0525Tool;
-  if (conj0525Tool === 'move' || conj0525Tool === 'add' || conj0525Tool === 'delete') {
-    setAbUnionTool(conj0525State, conj0525Tool);
+  const conjTool = target.dataset.conjTool;
+  const conjToolMode = target.dataset.conjToolMode;
+  if (conjTool === 'move' || conjTool === 'add' || conjTool === 'delete') {
+    setAbUnionTool(conjToolMode === '0521' ? conj0521State : conj0525State, conjTool);
     render();
     return;
   }
@@ -4015,6 +4049,25 @@ abUnionControls.addEventListener('change', (event) => {
     if (isAreaQuality(target.value)) {
       maxAreaState.quality = target.value;
       recomputeMaxArea();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.conjHardLimit !== undefined) {
+    if (target.dataset.conjHardLimit === '0521') {
+      conj0521Options.hardLimitDrag = target.checked;
+    } else if (target.dataset.conjHardLimit === '0525') {
+      conj0525Options.hardLimitDrag = target.checked;
+    }
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.conj0525ForceSum !== undefined) {
+    if (target.dataset.conj0525ForceSum === '3') {
+      conj0525Options.forceSum3 = target.checked;
+      render();
+    } else if (target.dataset.conj0525ForceSum === '5') {
+      conj0525Options.forceSum5 = target.checked;
       render();
     }
     return;
@@ -4254,6 +4307,9 @@ setupAbUnionInteraction(
     manualLocalCs[index] = clampToLocalCMax(value, 1);
   },
   render,
+  {
+    moveDotValue: (state, dot, value) => moveConj0521Dot(state, dot, value, conj0521Options),
+  },
 );
 
 setupAbUnionInteraction(
@@ -4266,6 +4322,9 @@ setupAbUnionInteraction(
     manualLocalCs[index] = clampToLocalCMax(value, 1);
   },
   render,
+  {
+    moveDotValue: (state, dot, value) => moveConj0525Dot(state, dot, value, conj0525Options),
+  },
 );
 
 freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => {

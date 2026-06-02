@@ -9,6 +9,8 @@ import {
   containsAbUnionLocal,
   createDefaultAbUnionState,
   renderAbUnion,
+  setAbUnionDotValue,
+  type AbUnionDotHandle,
   type AbUnionRenderResult,
   type AbUnionState,
 } from './abUnion';
@@ -18,7 +20,8 @@ const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
 const CONJ0521_CONSTRAINTS = ['<= 1', '= 1', '<= 1', '= 1', '> 1', '= 1'] as const;
-const CONJ0525_CONSTRAINTS = ['<= 1', '<= 1', '<= 1', '= 1', '> 1', '= 1'] as const;
+const DEFAULT_CONJ0521_OPTIONS = { hardLimitDrag: false } as const;
+const DEFAULT_CONJ0525_OPTIONS = { forceSum3: true, forceSum5: true, hardLimitDrag: false } as const;
 
 interface CircleGeometry {
   id: 'C2' | 'C5';
@@ -26,6 +29,15 @@ interface CircleGeometry {
 }
 
 type ConjConstraint = typeof CONJ0521_CONSTRAINTS[number];
+
+export interface Conj0521Options {
+  hardLimitDrag: boolean;
+}
+
+export interface Conj0525Options extends Conj0521Options {
+  forceSum3: boolean;
+  forceSum5: boolean;
+}
 
 export interface Conj0521Point {
   id: string;
@@ -174,24 +186,192 @@ export function enforceConj0521Constraints(state: AbUnionState): void {
   enforceConjCommonState(state, [null, 1, null, 1, null, 1], [false, false, false, false, true, false]);
 }
 
-export function enforceConj0525Constraints(state: AbUnionState): void {
-  if (!hasSplitEdgeDots(state)) {
-    const t = readTValues(state);
-    let t2 = clamp01((t[2] + t[3]) / 2);
-    let t4 = clamp01((t[4] + t[5]) / 2);
+function conj0525Constraints(options: Conj0525Options): readonly ConjConstraint[] {
+  return ['<= 1', '<= 1', '<= 1', options.forceSum3 ? '= 1' : '<= 1', '> 1', options.forceSum5 ? '= 1' : '<= 1'];
+}
 
-    if (t4 - t2 < STRICT_GAP) {
-      const center = clamp((t2 + t4) / 2, STRICT_GAP / 2, 1 - STRICT_GAP / 2);
-      t2 = center - STRICT_GAP / 2;
-      t4 = center + STRICT_GAP / 2;
-    }
+function conj0525FixedSums(options: Conj0525Options): Array<number | null> {
+  return [null, null, null, options.forceSum3 ? 1 : null, null, options.forceSum5 ? 1 : null];
+}
 
-    const t0 = clamp(t[0], t2, t4);
-    const t1 = clamp(t[1], t2, t0);
-    writeTValues(state, [t0, t1, t2, t2, t4, t4]);
+function clampConj0525TValues(t: number[], options: Conj0525Options): number[] {
+  let t2 = clamp01(options.forceSum3 ? (t[2] + t[3]) / 2 : t[2]);
+  let t3 = clamp01(options.forceSum3 ? t2 : t[3]);
+  let t4 = clamp01(options.forceSum5 ? (t[4] + t[5]) / 2 : t[4]);
+  let t5 = clamp01(options.forceSum5 ? t4 : t[5]);
+
+  t4 = Math.max(t4, STRICT_GAP);
+  t5 = options.forceSum5 ? t4 : clamp(t5, 0, t4);
+
+  if (options.forceSum3) {
+    t2 = clamp(t2, 0, Math.max(0, Math.min(t5, t4 - STRICT_GAP)));
+    t3 = t2;
+  } else {
+    t2 = clamp(t2, 0, t5);
+    t3 = clamp(t3, 0, Math.max(0, Math.min(t2, t4 - STRICT_GAP)));
   }
 
-  enforceConjCommonState(state, [null, null, null, 1, null, 1], [true, true, true, false, true, false]);
+  t5 = options.forceSum5 ? t4 : clamp(t5, t2, t4);
+  const t0 = clamp(t[0], t2, t5);
+  const t1 = clamp(t[1], t2, t0);
+  return [t0, t1, t2, t3, t4, t5];
+}
+
+function clampConjRowAtMostOne(state: AbUnionState, index: number): void {
+  const previous = state.edgeDots[mod6(index - 1)];
+  const current = state.edgeDots[mod6(index)];
+  if (!previous || !current || current.left <= previous.right + 1e-9) return;
+  current.left = previous.right;
+  if (!current.split || current.right < current.left) {
+    current.right = current.left;
+  }
+}
+
+function clampConj0525SplitRows(state: AbUnionState, options: Conj0525Options): void {
+  const strictPrevious = state.edgeDots[3];
+  const strictCurrent = state.edgeDots[4];
+  if (strictPrevious && strictCurrent && strictCurrent.left <= strictPrevious.right + STRICT_GAP) {
+    strictCurrent.left = clamp01(strictPrevious.right + STRICT_GAP);
+    if (!strictCurrent.split || strictCurrent.right < strictCurrent.left) {
+      strictCurrent.right = strictCurrent.left;
+    }
+  }
+
+  for (const index of [0, 1, 2]) {
+    clampConjRowAtMostOne(state, index);
+  }
+  if (!options.forceSum3) {
+    clampConjRowAtMostOne(state, 3);
+  }
+  if (!options.forceSum5) {
+    clampConjRowAtMostOne(state, 5);
+  }
+}
+
+export function enforceConj0525Constraints(
+  state: AbUnionState,
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+): void {
+  if (!hasSplitEdgeDots(state)) {
+    writeTValues(state, clampConj0525TValues(readTValues(state), options));
+  } else {
+    clampConj0525SplitRows(state, options);
+  }
+
+  enforceConjCommonState(state, conj0525FixedSums(options), [true, true, true, false, true, false]);
+}
+
+interface ConjDotSnapshot {
+  edgeDots: AbUnionState['edgeDots'];
+  lastOptimized: AbUnionState['lastOptimized'];
+  status: string;
+}
+
+function copyEdgeDots(edgeDots: AbUnionState['edgeDots']): AbUnionState['edgeDots'] {
+  return edgeDots.map((edge) => ({ ...edge }));
+}
+
+function captureConjDotSnapshot(state: AbUnionState): ConjDotSnapshot {
+  return {
+    edgeDots: copyEdgeDots(state.edgeDots),
+    lastOptimized: state.lastOptimized,
+    status: state.status,
+  };
+}
+
+function restoreConjDotSnapshot(state: AbUnionState, snapshot: ConjDotSnapshot): void {
+  state.edgeDots = copyEdgeDots(snapshot.edgeDots);
+  state.lastOptimized = snapshot.lastOptimized;
+  state.status = snapshot.status;
+}
+
+function dotEdgeValue(state: AbUnionState, dot: AbUnionDotHandle): number {
+  const edge = state.edgeDots[mod6(dot.edge)];
+  if (!edge) return 0.5;
+  return dot.role === 'right' ? edge.right : edge.left;
+}
+
+function hardLimitConstraintOk(sum: number, constraint: ConjConstraint): boolean {
+  if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
+  if (constraint === '> 1') return sum >= 1 + STRICT_GAP - 1e-9;
+  return sum <= 1 + 1e-9;
+}
+
+function conjConstraintsSatisfied(state: AbUnionState, constraints: readonly ConjConstraint[]): boolean {
+  const aValues = abUnionAValues(state);
+  const bValues = abUnionBValues(state);
+  return constraints.every((constraint, index) =>
+    hardLimitConstraintOk(aValues[index] + bValues[index], constraint),
+  );
+}
+
+function tryConjDotValueFromSnapshot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  constraints: readonly ConjConstraint[],
+  snapshot: ConjDotSnapshot,
+): boolean {
+  restoreConjDotSnapshot(state, snapshot);
+  return setAbUnionDotValue(state, dot, value) && conjConstraintsSatisfied(state, constraints);
+}
+
+function moveConjDotHardLimited(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  constraints: readonly ConjConstraint[],
+): void {
+  const snapshot = captureConjDotSnapshot(state);
+  const start = dotEdgeValue(state, dot);
+  const target = clamp01(value);
+
+  if (tryConjDotValueFromSnapshot(state, dot, target, constraints, snapshot)) {
+    return;
+  }
+
+  let valid = start;
+  let invalid = target;
+  for (let step = 0; step < BINARY_STEPS; step++) {
+    const candidate = (valid + invalid) / 2;
+    if (tryConjDotValueFromSnapshot(state, dot, candidate, constraints, snapshot)) {
+      valid = candidate;
+    } else {
+      invalid = candidate;
+    }
+  }
+
+  if (tryConjDotValueFromSnapshot(state, dot, valid, constraints, snapshot)) {
+    state.status = 'Hard-limit drag: constraint boundary reached.';
+  } else {
+    restoreConjDotSnapshot(state, snapshot);
+  }
+}
+
+export function moveConj0521Dot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  options: Conj0521Options = DEFAULT_CONJ0521_OPTIONS,
+): void {
+  if (options.hardLimitDrag) {
+    moveConjDotHardLimited(state, dot, value, CONJ0521_CONSTRAINTS);
+  } else {
+    setAbUnionDotValue(state, dot, value);
+  }
+}
+
+export function moveConj0525Dot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+): void {
+  if (options.hardLimitDrag) {
+    moveConjDotHardLimited(state, dot, value, conj0525Constraints(options));
+  } else {
+    setAbUnionDotValue(state, dot, value);
+  }
 }
 
 export function createDefaultConj0521State(): AbUnionState {
@@ -522,14 +702,15 @@ export function renderConj0525(
   state: AbUnionState,
   triangleState: TriangleState,
   localCs: number[],
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
 ): Conj0521RenderResult {
   return renderConj(
     ctx,
     state,
     triangleState,
     localCs,
-    enforceConj0525Constraints,
-    CONJ0525_CONSTRAINTS,
+    (currentState) => enforceConj0525Constraints(currentState, options),
+    conj0525Constraints(options),
     '0525',
     (circles, aValues, bValues) => [
       ...v4CirclePoints(circles, aValues, bValues),

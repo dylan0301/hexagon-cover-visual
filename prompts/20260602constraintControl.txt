@@ -1,0 +1,8 @@
+we currently force the a_i+b_i=1 for i=3,5 in conj2025
+make this as option and add checkboxes in the control panel
+ask me questions
+
+currently, if i move a point in conj0525, then other points move together in order to maintain the constraints.
+make checkbox in conj0525
+if checked, then i cannot just move the point beyond the constraints.
+ask me quesitons

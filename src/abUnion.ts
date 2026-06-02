@@ -190,6 +190,7 @@ export interface AbUnionBoundaryRenderResult {
 interface AbUnionInteractionCallbacks {
   onPreviewChange?: () => void;
   onCommitChange?: () => void;
+  moveDotValue?: (state: AbUnionState, dot: AbUnionDotHandle, value: number) => void;
 }
 
 interface MaskCache {
@@ -233,9 +234,9 @@ type PointerInteraction =
   | { kind: 'rotating-triangle'; startMouse: Point; startAngle: number; startPos: Point }
   | { kind: 'dragging-control'; startMouse: Point; startControl: Point };
 
-type AbUnionDotRole = 'left' | 'right' | 'shared';
+export type AbUnionDotRole = 'left' | 'right' | 'shared';
 
-interface AbUnionDotHandle {
+export interface AbUnionDotHandle {
   edge: number;
   role: AbUnionDotRole;
 }
@@ -1290,7 +1291,7 @@ function applyCoincidenceTarget(
   ) {
     return;
   }
-  setDotValue(state, { edge: normalizedEdge, role }, value);
+  setAbUnionDotValue(state, { edge: normalizedEdge, role }, value);
 }
 
 export function abUnionCoincidenceTargets(
@@ -2336,38 +2337,40 @@ function solveAbUnionConstraints(state: AbUnionState, preferences: AbUnionPrefer
   return true;
 }
 
-function setBValue(state: AbUnionState, index: number, value: number): void {
+function setBValue(state: AbUnionState, index: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'b', index, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setAValue(state: AbUnionState, index: number, value: number): void {
+function setAValue(state: AbUnionState, index: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'a', index, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setSharedEdgeValue(state: AbUnionState, edgeIndex: number, value: number): void {
+function setSharedEdgeValue(state: AbUnionState, edgeIndex: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'b', index: edgeIndex, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): void {
+export function setAbUnionDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): boolean {
   if (dot.role === 'left') {
-    setBValue(state, dot.edge, value);
+    return setBValue(state, dot.edge, value);
   } else if (dot.role === 'right') {
-    setAValue(state, dot.edge + 1, 1 - value);
-  } else {
-    setSharedEdgeValue(state, dot.edge, value);
+    return setAValue(state, dot.edge + 1, 1 - value);
   }
+  return setSharedEdgeValue(state, dot.edge, value);
 }
 
 function addEdgeDot(state: AbUnionState, edgeIndex: number, value: number): void {
@@ -3061,6 +3064,14 @@ export function setupAbUnionInteraction(
   let activePointerId: number | null = null;
   let activePointerType = 'mouse';
 
+  function moveDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): void {
+    if (callbacks.moveDotValue) {
+      callbacks.moveDotValue(state, dot, value);
+    } else {
+      setAbUnionDotValue(state, dot, value);
+    }
+  }
+
   function stop(): void {
     interaction = { kind: 'idle' };
     if (activePointerId !== null && canvas.hasPointerCapture(activePointerId)) {
@@ -3130,7 +3141,7 @@ export function setupAbUnionInteraction(
 
     if (state.tool === 'move' && hit?.kind === 'dot') {
       interaction = { kind: 'dragging-dot', dot: hit.dot, startMouse: mouse, moved: false };
-      setDotValue(state, hit.dot, projectEdgeValue(mouse, hit.dot.edge));
+      moveDotValue(state, hit.dot, projectEdgeValue(mouse, hit.dot.edge));
       callbacks.onPreviewChange?.();
       render();
     } else if (hit?.kind === 'local-c') {
@@ -3201,7 +3212,7 @@ export function setupAbUnionInteraction(
     if (interaction.kind === 'dragging-dot') {
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
-      setDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
+      moveDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
       callbacks.onPreviewChange?.();
     } else if (interaction.kind === 'dragging-f-mark') {
       interaction.moved = interaction.moved
