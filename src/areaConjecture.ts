@@ -237,6 +237,54 @@ function triangleContainsPoints(triangle: Point[], points: Point[]): boolean {
   return points.every((point) => pointInConvexPolygon(point, triangle));
 }
 
+function signedArea2(points: Point[]): number {
+  return points.reduce((sum, point, index) =>
+    sum + cross(point, points[(index + 1) % points.length]),
+  0);
+}
+
+function segmentHasPositiveIntersectionWithConvexPolygon(start: Point, end: Point, polygon: Point[]): boolean {
+  if (polygon.length < 3) return false;
+  const direction = subtract(end, start);
+  const orientation = signedArea2(polygon) >= 0 ? 1 : -1;
+  let tMin = 0;
+  let tMax = 1;
+
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const edge = subtract(b, a);
+    const value = orientation * cross(edge, subtract(start, a));
+    const delta = orientation * cross(edge, direction);
+
+    if (Math.abs(delta) < EPS) {
+      if (value < -EPS) return false;
+      continue;
+    }
+
+    const root = -value / delta;
+    if (delta > 0) {
+      tMin = Math.max(tMin, root);
+    } else {
+      tMax = Math.min(tMax, root);
+    }
+    if (tMax <= tMin + EPS) return false;
+  }
+
+  return tMax > tMin + EPS;
+}
+
+function triangleIsT3Like(indexInput: number, triangle: Point[]): boolean {
+  const index = mod6(indexInput);
+  const origin = { x: 0, y: 0 };
+  return segmentHasPositiveIntersectionWithConvexPolygon(origin, HEXAGON_VERTICES[mod6(index - 1)], triangle) ||
+    segmentHasPositiveIntersectionWithConvexPolygon(origin, HEXAGON_VERTICES[mod6(index + 1)], triangle);
+}
+
+function satisfiesAreaConstraint(index: number, triangle: Point[], t3Like: boolean): boolean {
+  return !t3Like || triangleIsT3Like(index, triangle);
+}
+
 function bounds(points: Point[]): { minX: number; maxX: number; minY: number; maxY: number } {
   return points.reduce((box, point) => ({
     minX: Math.min(box.minX, point.x),
@@ -302,6 +350,7 @@ function refineCenter(
   phi: number,
   feasible: Point[],
   steps: number,
+  isAllowed: (triangle: AreaConjTriangle & { value: number }) => boolean,
 ): { best: AreaConjTriangle & { value: number }; evaluations: number } {
   let best = start;
   let evaluations = 0;
@@ -329,6 +378,7 @@ function refineCenter(
       if (!pointInConvexPolygon(center, feasible)) continue;
       const candidate = evaluateTriangle(center, phi);
       evaluations++;
+      if (!isAllowed(candidate)) continue;
       if (candidate.value > best.value) {
         best = candidate;
         improved = true;
@@ -413,6 +463,7 @@ function refineAnchoredTriangle(
   points: Point[],
   thetaStep: number,
   steps: number,
+  isAllowed: (candidate: AnchoredTriangleCandidate) => boolean,
 ): { best: AnchoredTriangleCandidate; evaluations: number } {
   let best = start;
   let evaluations = 0;
@@ -424,6 +475,7 @@ function refineAnchoredTriangle(
       const phi = normalizeAnglePeriod(best.triangle.phi + direction * step);
       const candidate = anchoredTriangleCandidate(best.anchor, best.slot, phi, points);
       evaluations++;
+      if (candidate && !isAllowed(candidate)) continue;
       if (candidate && betterCandidate(candidate, best)) {
         best = candidate;
         improved = true;
@@ -435,8 +487,8 @@ function refineAnchoredTriangle(
   return { best, evaluations };
 }
 
-function cacheKey(index: number, a: number, b: number, quality: AreaConjQuality): string {
-  return `${mod6(index)}:${a.toFixed(6)}:${b.toFixed(6)}:${quality}`;
+function cacheKey(index: number, a: number, b: number, quality: AreaConjQuality, t3Like: boolean): string {
+  return `${mod6(index)}:${a.toFixed(6)}:${b.toFixed(6)}:${quality}:${t3Like ? 't3' : 'all'}`;
 }
 
 function cacheResult(key: string, result: AreaConjResult): AreaConjResult {
@@ -467,10 +519,11 @@ export function computeAreaConjResult(
   aInput: number,
   bInput: number,
   quality: AreaConjQuality,
+  t3Like = false,
 ): AreaConjResult {
   const a = clamp01(aInput);
   const b = clamp01(bInput);
-  const key = cacheKey(index, a, b, quality);
+  const key = cacheKey(index, a, b, quality, t3Like);
   const cached = resultCache.get(key);
   if (cached) return cached;
 
@@ -483,7 +536,7 @@ export function computeAreaConjResult(
   if (a + b <= 1 + EPS) {
     const axisCandidate = axisAlignedCandidate(index, a, b, points);
     evaluations++;
-    if (axisCandidate) {
+    if (axisCandidate && satisfiesAreaConstraint(index, axisCandidate.triangle.vertices, t3Like)) {
       best = chooseCandidate(axisCandidate, best);
     }
   }
@@ -498,6 +551,7 @@ export function computeAreaConjResult(
           const candidate = anchoredTriangleCandidate(anchor, slot, phi, points);
           evaluations++;
           if (!candidate) continue;
+          if (!satisfiesAreaConstraint(index, candidate.triangle.vertices, t3Like)) continue;
           best = chooseCandidate(candidate, best);
           if (betterCandidate(candidate, bestAnchored)) {
             bestAnchored = candidate;
@@ -511,6 +565,7 @@ export function computeAreaConjResult(
         points,
         ANGLE_PERIOD / spec.thetaSamples,
         spec.refineSteps,
+        (candidate) => satisfiesAreaConstraint(index, candidate.triangle.vertices, t3Like),
       );
       evaluations += refined.evaluations;
       best = chooseCandidate(refined.best, best);
@@ -526,6 +581,7 @@ export function computeAreaConjResult(
     for (const center of candidateCenters(feasible, spec.centerGrid)) {
       const candidate = evaluateTriangle(center, phi);
       evaluations++;
+      if (!satisfiesAreaConstraint(index, candidate.vertices, t3Like)) continue;
       best = chooseCandidate({ triangle: candidate, source: 'generic' }, best);
       if (!bestForPhi || candidate.value > bestForPhi.value) {
         bestForPhi = candidate;
@@ -533,7 +589,13 @@ export function computeAreaConjResult(
     }
 
     if (spec.refineSteps > 0 && bestForPhi) {
-      const refined = refineCenter(bestForPhi, phi, feasible, spec.refineSteps);
+      const refined = refineCenter(
+        bestForPhi,
+        phi,
+        feasible,
+        spec.refineSteps,
+        (candidate) => satisfiesAreaConstraint(index, candidate.vertices, t3Like),
+      );
       evaluations += refined.evaluations;
       best = chooseCandidate({ triangle: refined.best, source: 'generic' }, best);
     }

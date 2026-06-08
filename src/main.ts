@@ -257,6 +257,7 @@ interface MaxAreaState {
   a: number;
   b: number;
   quality: AreaConjQuality;
+  t3Like: boolean;
   result: AreaConjResult;
   dirty: boolean;
   sumConstraintMode: AbUnionSumConstraintMode;
@@ -266,12 +267,14 @@ const maxAreaState: MaxAreaState = {
   a: 0.2,
   b: 0.5,
   quality: 'coarse',
+  t3Like: false,
   result: computeAreaConjResult(0, 0.2, 0.5, 'coarse'),
   dirty: false,
   sumConstraintMode: 'none',
 };
 
 let areaConjQuality: AreaConjQuality = 'coarse';
+let areaConjT3Like = Array<boolean>(6).fill(false);
 let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
@@ -2633,7 +2636,7 @@ function setMaxAreaSumConstraint(mode: AbUnionSumConstraintMode): void {
 }
 
 function recomputeMaxArea(): void {
-  maxAreaState.result = computeAreaConjResult(0, maxAreaState.a, maxAreaState.b, maxAreaState.quality);
+  maxAreaState.result = computeAreaConjResult(0, maxAreaState.a, maxAreaState.b, maxAreaState.quality, maxAreaState.t3Like);
   maxAreaState.dirty = false;
 }
 
@@ -2645,7 +2648,7 @@ function recomputeAreaConjResults(): void {
   const aValues = abUnionAValues(areaConjState);
   const bValues = abUnionBValues(areaConjState);
   areaConjResults = Array.from({ length: 6 }, (_, index) =>
-    computeAreaConjResult(index, aValues[index], bValues[index], areaConjQuality),
+    computeAreaConjResult(index, aValues[index], bValues[index], areaConjQuality, areaConjT3Like[index] ?? false),
   );
   areaConjDirty = false;
 }
@@ -2739,7 +2742,7 @@ function renderMaxAreaCanvasAndReadouts(): void {
   localCBounds.textContent = `f(a,b)=${formatAreaNumber(maxAreaState.result.f)}, 1-f=${formatAreaNumber(maxAreaState.result.deficit)}`;
   localCValues.textContent = maxAreaState.dirty
     ? 'stale: recompute after commit'
-    : `quality=${maxAreaState.quality}, constraint=${areaSumModeText(maxAreaState.sumConstraintMode)}, evaluations=${maxAreaState.result.evaluations}`;
+    : `quality=${maxAreaState.quality}, constraint=${areaSumModeText(maxAreaState.sumConstraintMode)}, T3-like=${maxAreaState.t3Like ? 'on' : 'off'}, evaluations=${maxAreaState.result.evaluations}`;
   ceStatus.textContent = 'Max Area: CE/g-chain inactive';
   ceStatus.style.color = '#475569';
   ceChainStatus.textContent = maxAreaState.result.feasible ? 'realizing triangle found' : 'infeasible; using f=0';
@@ -2775,6 +2778,7 @@ function renderMaxAreaPanel(): void {
           <option value="high"${maxAreaState.quality === 'high' ? ' selected' : ''}>high</option>
         </select>
       </label>
+      <label><input type="checkbox" data-max-area-t3-like${maxAreaState.t3Like ? ' checked' : ''}/>T3-like</label>
       <button type="button" class="free-button" data-max-area-recompute${maxAreaState.dirty ? '' : ' disabled'}>recompute</button>
     </div>
     <div class="ab-union-toolbar">
@@ -2789,6 +2793,7 @@ function renderMaxAreaPanel(): void {
       <span>b</span><strong>${formatAreaNumber(maxAreaState.b)}</strong>
       <span>a+b</span><strong>${formatAreaNumber(maxAreaState.a + maxAreaState.b)}</strong>
       <span>constraint</span><strong>${escapeHtml(constraintText)}</strong>
+      <span>T3-like</span><strong>${maxAreaState.t3Like ? 'on' : 'off'}</strong>
       <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
       <span>f(a,b)</span><strong>${formatAreaNumber(result.f)}</strong>
       <span>1-f(a,b)</span><strong>${formatAreaNumber(result.deficit)}</strong>
@@ -2824,6 +2829,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
   const totalDeficit = areaConjResults.reduce((sum, result) => sum + result.deficit, 0);
   const infeasibleCount = areaConjResults.filter((result) => !result.feasible).length;
   const gtOneCount = boundary.regionRows.filter((row) => row.sum > 1 + 1e-9).length;
+  const t3LikeCount = areaConjT3Like.filter(Boolean).length;
   const staleText = areaConjDirty ? 'stale: current dots changed; f rows update after commit' : 'ready';
   const staleClass = areaConjDirty ? 'ab-union-pill is-warn' : 'ab-union-pill is-good';
   const regionRowsHtml = boundary.regionRows.map((row) => {
@@ -2835,6 +2841,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
     return `
       <tr class="${areaConjState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.sum > 1 + 1e-9 ? ' ab-union-equality-row' : ''}">
         <td>R${row.index}</td>
+        <td><input type="checkbox" title="constrain f${row.index} to T3-like triangles" data-area-t3-index="${row.index}"${areaConjT3Like[row.index] ? ' checked' : ''}/></td>
         <td><input type="checkbox" title="include a${row.index} in the same-a group" data-area-lock-kind="a" data-area-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
         <td><input type="checkbox" title="include b${row.index} in the same-b group" data-area-lock-kind="b" data-area-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
         <td><input type="checkbox" title="${currentTitle}" data-area-sum-mode="current" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'current' ? ' checked' : ''}/></td>
@@ -2886,6 +2893,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       <span>Σ f_i</span><strong>${totalF.toFixed(6)}</strong>
       <span>Σ (1-f_i)</span><strong>${totalDeficit.toFixed(6)}</strong>
       <span>rows with a_i+b_i &gt; 1</span><strong>${gtOneCount}</strong>
+      <span>T3-like rows</span><strong>${t3LikeCount}</strong>
       <span>infeasible rows</span><strong>${infeasibleCount}</strong>
       <span>active boundaries</span><strong>${escapeHtml(boundary.activeLabel)}</strong>
       <span>quality</span><strong>${escapeHtml(areaConjQuality)}</strong>
@@ -2895,7 +2903,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
     <div class="free-row"><span>${escapeHtml(areaConjState.status)}</span></div>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>T3</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
     <div class="ab-union-section-title">edge dots</div>
@@ -4045,6 +4053,12 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
+  if (target instanceof HTMLInputElement && target.dataset.maxAreaT3Like !== undefined) {
+    maxAreaState.t3Like = target.checked;
+    recomputeMaxArea();
+    render();
+    return;
+  }
   if (target instanceof HTMLSelectElement && target.dataset.maxAreaQuality !== undefined) {
     if (isAreaQuality(target.value)) {
       maxAreaState.quality = target.value;
@@ -4075,6 +4089,16 @@ abUnionControls.addEventListener('change', (event) => {
   if (target instanceof HTMLSelectElement && target.dataset.areaQuality !== undefined) {
     if (isAreaQuality(target.value)) {
       areaConjQuality = target.value;
+      markAreaConjDirty();
+      recomputeAreaConjResults();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.areaT3Index !== undefined) {
+    const index = Number(target.dataset.areaT3Index);
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      areaConjT3Like[index] = target.checked;
       markAreaConjDirty();
       recomputeAreaConjResults();
       render();
