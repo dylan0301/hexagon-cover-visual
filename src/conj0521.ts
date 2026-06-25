@@ -9,6 +9,8 @@ import {
   containsAbUnionLocal,
   createDefaultAbUnionState,
   renderAbUnion,
+  setAbUnionDotValue,
+  type AbUnionDotHandle,
   type AbUnionRenderResult,
   type AbUnionState,
 } from './abUnion';
@@ -17,10 +19,24 @@ const STRICT_GAP = 1e-6;
 const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
+const CONJ0521_CONSTRAINTS = ['<= 1', '= 1', '<= 1', '= 1', '> 1', '= 1'] as const;
+const DEFAULT_CONJ0521_OPTIONS = { hardLimitDrag: false } as const;
+const DEFAULT_CONJ0525_OPTIONS = { forceSum3: true, forceSum5: true, hardLimitDrag: false } as const;
 
 interface CircleGeometry {
   id: 'C2' | 'C5';
   center: Point;
+}
+
+type ConjConstraint = typeof CONJ0521_CONSTRAINTS[number];
+
+export interface Conj0521Options {
+  hardLimitDrag: boolean;
+}
+
+export interface Conj0525Options extends Conj0521Options {
+  forceSum3: boolean;
+  forceSum5: boolean;
 }
 
 export interface Conj0521Point {
@@ -114,11 +130,42 @@ function readTValues(state: AbUnionState): number[] {
   });
 }
 
+function hasSplitEdgeDots(state: AbUnionState): boolean {
+  return state.edgeDots?.some((edge) => edge?.split) ?? false;
+}
+
 function writeTValues(state: AbUnionState, t: number[]): void {
   state.edgeDots = Array.from({ length: 6 }, (_, index) => {
     const value = clamp01(t[index] ?? 0.5);
     return { left: value, right: value, split: false };
   });
+}
+
+function enforceConjCommonState(
+  state: AbUnionState,
+  fixedSums: Array<number | null>,
+  defaultActiveRegions: boolean[],
+): void {
+  state.fixedSums = fixedSums.slice();
+  state.sumConstraintModes = fixedSums.map((sum) => sum === null ? 'none' : 'current');
+  state.aLocked = Array(6).fill(false);
+  state.bLocked = Array(6).fill(false);
+  state.centerMode = 'none';
+  state.centerLocked = false;
+  state.showThetaTriangle = false;
+  state.showFarPair = false;
+  state.showOriginalRegion = true;
+  state.useAxisAlignedHull = false;
+  state.clipToCornerSectors = false;
+  state.regionVisible = Array(6).fill(true);
+  state.selectedMarkSources = [];
+  state.coincidenceLocks = [];
+  state.labels = [];
+  state.fMarks = [];
+  state.selectedFMarkId = null;
+  if (!Array.isArray(state.activeRegions) || state.activeRegions.length !== 6) {
+    state.activeRegions = defaultActiveRegions.slice();
+  }
 }
 
 export function enforceConj0521Constraints(state: AbUnionState): void {
@@ -136,25 +183,194 @@ export function enforceConj0521Constraints(state: AbUnionState): void {
   const t0 = clamp(t0Input, t2, t4);
   writeTValues(state, [t0, t0, t2, t2, t4, t4]);
 
-  state.fixedSums = [null, 1, null, 1, null, 1];
-  state.aLocked = Array(6).fill(false);
-  state.bLocked = Array(6).fill(false);
-  state.centerMode = 'none';
-  state.centerLocked = false;
-  state.tool = 'move';
-  state.showThetaTriangle = false;
-  state.showFarPair = false;
-  state.showOriginalRegion = true;
-  state.useAxisAlignedHull = false;
-  state.clipToCornerSectors = false;
-  state.regionVisible = Array(6).fill(true);
-  state.selectedMarkSources = [];
-  state.coincidenceLocks = [];
-  state.labels = [];
-  state.fMarks = [];
-  state.selectedFMarkId = null;
-  if (!Array.isArray(state.activeRegions) || state.activeRegions.length !== 6) {
-    state.activeRegions = [false, false, false, false, true, false];
+  enforceConjCommonState(state, [null, 1, null, 1, null, 1], [false, false, false, false, true, false]);
+}
+
+function conj0525Constraints(options: Conj0525Options): readonly ConjConstraint[] {
+  return ['<= 1', '<= 1', '<= 1', options.forceSum3 ? '= 1' : '<= 1', '> 1', options.forceSum5 ? '= 1' : '<= 1'];
+}
+
+function conj0525FixedSums(options: Conj0525Options): Array<number | null> {
+  return [null, null, null, options.forceSum3 ? 1 : null, null, options.forceSum5 ? 1 : null];
+}
+
+function clampConj0525TValues(t: number[], options: Conj0525Options): number[] {
+  let t2 = clamp01(options.forceSum3 ? (t[2] + t[3]) / 2 : t[2]);
+  let t3 = clamp01(options.forceSum3 ? t2 : t[3]);
+  let t4 = clamp01(options.forceSum5 ? (t[4] + t[5]) / 2 : t[4]);
+  let t5 = clamp01(options.forceSum5 ? t4 : t[5]);
+
+  t4 = Math.max(t4, STRICT_GAP);
+  t5 = options.forceSum5 ? t4 : clamp(t5, 0, t4);
+
+  if (options.forceSum3) {
+    t2 = clamp(t2, 0, Math.max(0, Math.min(t5, t4 - STRICT_GAP)));
+    t3 = t2;
+  } else {
+    t2 = clamp(t2, 0, t5);
+    t3 = clamp(t3, 0, Math.max(0, Math.min(t2, t4 - STRICT_GAP)));
+  }
+
+  t5 = options.forceSum5 ? t4 : clamp(t5, t2, t4);
+  const t0 = clamp(t[0], t2, t5);
+  const t1 = clamp(t[1], t2, t0);
+  return [t0, t1, t2, t3, t4, t5];
+}
+
+function clampConjRowAtMostOne(state: AbUnionState, index: number): void {
+  const previous = state.edgeDots[mod6(index - 1)];
+  const current = state.edgeDots[mod6(index)];
+  if (!previous || !current || current.left <= previous.right + 1e-9) return;
+  current.left = previous.right;
+  if (!current.split || current.right < current.left) {
+    current.right = current.left;
+  }
+}
+
+function clampConj0525SplitRows(state: AbUnionState, options: Conj0525Options): void {
+  const strictPrevious = state.edgeDots[3];
+  const strictCurrent = state.edgeDots[4];
+  if (strictPrevious && strictCurrent && strictCurrent.left <= strictPrevious.right + STRICT_GAP) {
+    strictCurrent.left = clamp01(strictPrevious.right + STRICT_GAP);
+    if (!strictCurrent.split || strictCurrent.right < strictCurrent.left) {
+      strictCurrent.right = strictCurrent.left;
+    }
+  }
+
+  for (const index of [0, 1, 2]) {
+    clampConjRowAtMostOne(state, index);
+  }
+  if (!options.forceSum3) {
+    clampConjRowAtMostOne(state, 3);
+  }
+  if (!options.forceSum5) {
+    clampConjRowAtMostOne(state, 5);
+  }
+}
+
+export function enforceConj0525Constraints(
+  state: AbUnionState,
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+): void {
+  if (!hasSplitEdgeDots(state)) {
+    writeTValues(state, clampConj0525TValues(readTValues(state), options));
+  } else {
+    clampConj0525SplitRows(state, options);
+  }
+
+  enforceConjCommonState(state, conj0525FixedSums(options), [true, true, true, false, true, false]);
+}
+
+interface ConjDotSnapshot {
+  edgeDots: AbUnionState['edgeDots'];
+  lastOptimized: AbUnionState['lastOptimized'];
+  status: string;
+}
+
+function copyEdgeDots(edgeDots: AbUnionState['edgeDots']): AbUnionState['edgeDots'] {
+  return edgeDots.map((edge) => ({ ...edge }));
+}
+
+function captureConjDotSnapshot(state: AbUnionState): ConjDotSnapshot {
+  return {
+    edgeDots: copyEdgeDots(state.edgeDots),
+    lastOptimized: state.lastOptimized,
+    status: state.status,
+  };
+}
+
+function restoreConjDotSnapshot(state: AbUnionState, snapshot: ConjDotSnapshot): void {
+  state.edgeDots = copyEdgeDots(snapshot.edgeDots);
+  state.lastOptimized = snapshot.lastOptimized;
+  state.status = snapshot.status;
+}
+
+function dotEdgeValue(state: AbUnionState, dot: AbUnionDotHandle): number {
+  const edge = state.edgeDots[mod6(dot.edge)];
+  if (!edge) return 0.5;
+  return dot.role === 'right' ? edge.right : edge.left;
+}
+
+function hardLimitConstraintOk(sum: number, constraint: ConjConstraint): boolean {
+  if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
+  if (constraint === '> 1') return sum >= 1 + STRICT_GAP - 1e-9;
+  return sum <= 1 + 1e-9;
+}
+
+function conjConstraintsSatisfied(state: AbUnionState, constraints: readonly ConjConstraint[]): boolean {
+  const aValues = abUnionAValues(state);
+  const bValues = abUnionBValues(state);
+  return constraints.every((constraint, index) =>
+    hardLimitConstraintOk(aValues[index] + bValues[index], constraint),
+  );
+}
+
+function tryConjDotValueFromSnapshot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  constraints: readonly ConjConstraint[],
+  snapshot: ConjDotSnapshot,
+): boolean {
+  restoreConjDotSnapshot(state, snapshot);
+  return setAbUnionDotValue(state, dot, value) && conjConstraintsSatisfied(state, constraints);
+}
+
+function moveConjDotHardLimited(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  constraints: readonly ConjConstraint[],
+): void {
+  const snapshot = captureConjDotSnapshot(state);
+  const start = dotEdgeValue(state, dot);
+  const target = clamp01(value);
+
+  if (tryConjDotValueFromSnapshot(state, dot, target, constraints, snapshot)) {
+    return;
+  }
+
+  let valid = start;
+  let invalid = target;
+  for (let step = 0; step < BINARY_STEPS; step++) {
+    const candidate = (valid + invalid) / 2;
+    if (tryConjDotValueFromSnapshot(state, dot, candidate, constraints, snapshot)) {
+      valid = candidate;
+    } else {
+      invalid = candidate;
+    }
+  }
+
+  if (tryConjDotValueFromSnapshot(state, dot, valid, constraints, snapshot)) {
+    state.status = 'Hard-limit drag: constraint boundary reached.';
+  } else {
+    restoreConjDotSnapshot(state, snapshot);
+  }
+}
+
+export function moveConj0521Dot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  options: Conj0521Options = DEFAULT_CONJ0521_OPTIONS,
+): void {
+  if (options.hardLimitDrag) {
+    moveConjDotHardLimited(state, dot, value, CONJ0521_CONSTRAINTS);
+  } else {
+    setAbUnionDotValue(state, dot, value);
+  }
+}
+
+export function moveConj0525Dot(
+  state: AbUnionState,
+  dot: AbUnionDotHandle,
+  value: number,
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+): void {
+  if (options.hardLimitDrag) {
+    moveConjDotHardLimited(state, dot, value, conj0525Constraints(options));
+  } else {
+    setAbUnionDotValue(state, dot, value);
   }
 }
 
@@ -164,6 +380,15 @@ export function createDefaultConj0521State(): AbUnionState {
   state.activeRegions = [false, false, false, false, true, false];
   enforceConj0521Constraints(state);
   state.status = '0521 constraints active.';
+  return state;
+}
+
+export function createDefaultConj0525State(): AbUnionState {
+  const state = createDefaultAbUnionState();
+  writeTValues(state, [0.5, 0.42, 0.35, 0.35, 0.55, 0.55]);
+  state.activeRegions = [true, true, true, false, true, false];
+  enforceConj0525Constraints(state);
+  state.status = '0525 constraints active.';
   return state;
 }
 
@@ -179,6 +404,16 @@ function circleGeometries(tValues: number[]): CircleGeometry[] {
 function containsR4(point: Point, a4: number, b4: number): boolean {
   const local = localCoordinates(4, point);
   return containsAbUnionLocal(local.u, local.v, a4, b4);
+}
+
+function containsRegion(point: Point, index: number, aValues: number[], bValues: number[]): boolean {
+  const local = localCoordinates(index, point);
+  return containsAbUnionLocal(local.u, local.v, aValues[index], bValues[index]);
+}
+
+function isRedPoint(point: Point, aValues: number[], bValues: number[]): boolean {
+  return !Array.from({ length: 6 }, (_, index) => index)
+    .some((index) => containsRegion(point, index, aValues, bValues));
 }
 
 function findBoundaryOnParam(
@@ -302,21 +537,28 @@ function maxCPoint(index: number, a: number, b: number): Point {
   return scale(1 - c, HEXAGON_VERTICES[index]);
 }
 
-function buildRows(aValues: number[], bValues: number[]): Conj0521RegionRow[] {
+function diagonalRedWitness(index: number, aValues: number[], bValues: number[]): Point | null {
+  const pointAt = (t: number) => scale(t, HEXAGON_VERTICES[index]);
+  const red = (point: Point) => isRedPoint(point, aValues, bValues);
+  if (!red(pointAt(0))) return null;
+  return findBoundaryOnParam(pointAt, red) ?? pointAt(1);
+}
+
+function constraintOk(sum: number, constraint: ConjConstraint): boolean {
+  if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
+  if (constraint === '> 1') return sum > 1;
+  return sum <= 1 + 1e-7;
+}
+
+function buildRows(
+  aValues: number[],
+  bValues: number[],
+  constraints: readonly ConjConstraint[],
+): Conj0521RegionRow[] {
   return Array.from({ length: 6 }, (_, index) => {
     const sum = aValues[index] + bValues[index];
-    let constraint = 'free';
-    let ok = true;
-    if (index === 1 || index === 3 || index === 5) {
-      constraint = '= 1';
-      ok = Math.abs(sum - 1) <= 1e-7;
-    } else if (index === 4) {
-      constraint = '> 1';
-      ok = sum > 1;
-    } else if (index === 0 || index === 2) {
-      constraint = '<= 1';
-      ok = sum <= 1 + 1e-7;
-    }
+    const constraint = constraints[index];
+    const ok = constraintOk(sum, constraint);
     return { index, a: aValues[index], b: bValues[index], sum, constraint, ok };
   });
 }
@@ -381,31 +623,37 @@ function drawOverlay(ctx: CanvasRenderingContext2D, circles: CircleGeometry[], p
   drawConjPoints(ctx, points);
 }
 
-export function renderConj0521(
+function v4CirclePoints(circles: CircleGeometry[], aValues: number[], bValues: number[]): Conj0521Point[] {
+  const p3 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[0], aValues[4], bValues[4]));
+  const p5 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[1], aValues[4], bValues[4]));
+  return [
+    { id: 'P3', label: 'R4/C2', point: p3 },
+    { id: 'P5', label: 'R4/C5', point: p5 },
+  ];
+}
+
+function renderConj(
   ctx: CanvasRenderingContext2D,
   state: AbUnionState,
   triangleState: TriangleState,
   localCs: number[],
+  enforce: (state: AbUnionState) => void,
+  constraints: readonly ConjConstraint[],
+  triangleName: string,
+  buildPoints: (circles: CircleGeometry[], aValues: number[], bValues: number[]) => Conj0521Point[],
 ): Conj0521RenderResult {
-  enforceConj0521Constraints(state);
-  const base = renderAbUnion(ctx, state, triangleState, localCs);
-  enforceConj0521Constraints(state);
+  enforce(state);
+  const base = renderAbUnion(ctx, state, triangleState, localCs, { computeTheta: false });
+  enforce(state);
 
   const aValues = abUnionAValues(state);
   const bValues = abUnionBValues(state);
   const tValues = readTValues(state);
   const circles = circleGeometries(tValues);
-  const p3 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[0], aValues[4], bValues[4]));
-  const p5 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[1], aValues[4], bValues[4]));
-  const points: Conj0521Point[] = [
-    { id: 'P3', label: 'R4/C2', point: p3 },
-    { id: 'P5', label: 'R4/C5', point: p5 },
-    { id: 'G0', label: 'V0 max c', point: maxCPoint(0, aValues[0], bValues[0]) },
-    { id: 'G2', label: 'V2 max c', point: maxCPoint(2, aValues[2], bValues[2]) },
-  ];
+  const points = buildPoints(circles, aValues, bValues);
   const concretePoints = points.flatMap((item) => item.point ? [item.point] : []);
   const triangle = concretePoints.length === points.length
-    ? fitTriangle('0521', concretePoints, '#eab308')
+    ? fitTriangle(triangleName, concretePoints, '#eab308')
     : null;
   drawOverlay(ctx, circles, points, triangle);
 
@@ -419,10 +667,56 @@ export function renderConj0521(
     aValues,
     bValues,
     tValues,
-    rows: buildRows(aValues, bValues),
+    rows: buildRows(aValues, bValues, constraints),
     points,
     triangle,
     strictGap: aValues[4] + bValues[4] - 1,
     status,
   };
+}
+
+export function renderConj0521(
+  ctx: CanvasRenderingContext2D,
+  state: AbUnionState,
+  triangleState: TriangleState,
+  localCs: number[],
+): Conj0521RenderResult {
+  return renderConj(
+    ctx,
+    state,
+    triangleState,
+    localCs,
+    enforceConj0521Constraints,
+    CONJ0521_CONSTRAINTS,
+    '0521',
+    (circles, aValues, bValues) => [
+      ...v4CirclePoints(circles, aValues, bValues),
+      { id: 'G0', label: 'V0 max c', point: maxCPoint(0, aValues[0], bValues[0]) },
+      { id: 'G2', label: 'V2 max c', point: maxCPoint(2, aValues[2], bValues[2]) },
+    ],
+  );
+}
+
+export function renderConj0525(
+  ctx: CanvasRenderingContext2D,
+  state: AbUnionState,
+  triangleState: TriangleState,
+  localCs: number[],
+  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+): Conj0521RenderResult {
+  return renderConj(
+    ctx,
+    state,
+    triangleState,
+    localCs,
+    (currentState) => enforceConj0525Constraints(currentState, options),
+    conj0525Constraints(options),
+    '0525',
+    (circles, aValues, bValues) => [
+      ...v4CirclePoints(circles, aValues, bValues),
+      { id: 'D0', label: 'red on O-V0', point: diagonalRedWitness(0, aValues, bValues) },
+      { id: 'D1', label: 'red on O-V1', point: diagonalRedWitness(1, aValues, bValues) },
+      { id: 'D2', label: 'red on O-V2', point: diagonalRedWitness(2, aValues, bValues) },
+    ],
+  );
 }

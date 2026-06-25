@@ -45,7 +45,7 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - `original AB union` controls the shaded exact covered-region fill.
 - `visible regions` checkboxes control which individual `R_i` fills contribute to the shaded overlays.
 - `hex-axis hull` shows the hull overlay and uses it for the sampled mask. It replaces each row with `a_i+b_i < 1` by a hex-axis hull using adjacent-edge boundary hits. Near `a_i+b_i=1`, it adds local top-start/top-end cuts to reduce the upper/right excess while preserving sampled containment.
-- `show purple triangle` toggles the sampled enclosing equilateral triangle for the current `theta`.
+- `show purple triangle` toggles the sampled enclosing equilateral triangle. `auto optimize theta` updates it to the sampled best angle after completed AB changes; disabling auto restores the manual theta slider and optimize button.
 - `show red pair > 1` continuously searches the red uncovered region for a sampled pair farther than distance `1` and draws the witness when found.
 - `clip to corner sectors` clips `R_i` to the sector bounded by the adjacent half-diagonals; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
 - The center dropdown can show no center shape, the draggable C-triangle, the draggable C-circle, or the manual `c_i` convex hull. `lock center` freezes the active center geometry but still allows changing the center mode.
@@ -55,11 +55,11 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 
 ## `Hull debug` mode
 
-`Hull debug` is a diagnostic local view for sketching a desired hex-axis hull around one strict `R(a,b)` set. The default example is `a=0.20`, `b=0.50`.
+`Hull debug` is a diagnostic local view for inspecting one `R(a,b)` set and sketching a desired hex-axis hull when `a+b<1`. The default example is `a=0.20`, `b=0.50`.
 
-- The canvas shows local coordinates: `u` points from `V_i` to `V_{i+1}`, and `v` points from `V_i` to `V_{i-1}`.
+- The canvas shows the full local hexagon footprint in coordinates where `u` points from `V_i` to `V_{i+1}`, and `v` points from `V_i` to `V_{i-1}`.
 - The exact sampled AB-union set, required points, and adjacent-edge boundary hits are drawn as references.
-- `load suggested hull` replaces the current polygon with the code-generated hex-axis hull for the current `a,b`, then closes it for local editing.
+- `load suggested hull` replaces the current polygon with the code-generated hex-axis hull for strict rows with `a+b<1`; for `a+b>=1`, no suggested hull is shown.
 - Click to add polygon vertices. On a closed polygon, click an edge to insert a new dot on that edge.
 - Drag vertices to adjust them while preserving snapped edge directions where possible.
 - Select a dot and use `delete selected dot`, Backspace, or Delete to remove it while preserving local axis alignment.
@@ -72,6 +72,16 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 `0521 conj` is a diagnostic AB-union slice for the May 21 conjecture reduction.
 
 - The mode uses one draggable point `X_i` per edge and enforces `a1+b1=a3+b3=a5+b5=1`, `a4+b4>1`, `a0+b0<=1`, and `a2+b2<=1`.
+- The control panel has `move`, `add`, and `delete` tools plus a `hard limit` checkbox; when checked, dot drags clamp at the active constraints instead of letting unrelated dots move to repair them.
 - The canvas reuses the AB-union overlay, then draws the two full radius-1 circles centered at `X2` and `X5`.
 - It marks two numerical intersections between the `R4` boundary and those circle boundaries, plus the `V0` and `V2` max-c points on `OV0` and `OV2`.
 - It fits and draws the smallest enclosing equilateral triangle for the four marked points and reports its side length in the right panel.
+
+## `0525 conj` mode
+
+`0525 conj` is the five-point variant of the diagnostic AB-union slice.
+
+- The mode enforces `a4+b4>1` and `a0+b0,a1+b1,a2+b2<=1`.
+- The control panel has independent checkboxes for forcing `a3+b3=1` and `a5+b5=1`; when unchecked, those rows use `<=1` instead.
+- The `hard limit` checkbox clamps dot drags at the active constraints instead of letting unrelated dots move to repair them.
+- It marks the two `R4`/circle intersections and three diagonal red-witness points, then fits the smallest enclosing equilateral triangle for the five marked points.

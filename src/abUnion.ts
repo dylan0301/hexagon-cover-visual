@@ -20,6 +20,7 @@ const SQRT3 = Math.sqrt(3);
 const ANGLE_PERIOD = 2 * Math.PI / 3;
 const EPS = 1e-7;
 const EPS2 = 1e-12;
+const ONE_SUM_CONSTRAINT_TOLERANCE = 1e-12;
 const REGION_VERTEX_HIT_PX = 12;
 const POINT_HIT_PX = 14;
 const LOCAL_C_HIT_PX = 8;
@@ -47,6 +48,7 @@ export type AbUnionQuality = 'coarse' | 'high' | 'adaptive';
 export type AbUnionPreset = 'equality' | 'midpoint';
 export type AbUnionTool = 'move' | 'add' | 'delete' | 'd-mark' | 's-mark' | 'f-mark';
 export type AbUnionLockKind = 'a' | 'b';
+export type AbUnionSumConstraintMode = 'none' | 'current' | 'one' | 'one-plus-delta';
 export type AbUnionLabelMode = 'dynamic' | 'static';
 export type AbUnionCoincidenceRole = 'shared' | 'left' | 'right';
 export type AbUnionMarkSourceKind =
@@ -105,10 +107,13 @@ export interface AbUnionState {
   showFarPair: boolean;
   clipToCornerSectors: boolean;
   useAxisAlignedHull: boolean;
+  autoOptimizeTheta: boolean;
+  thetaOptimizationPending: boolean;
   regionVisible: boolean[];
   aLocked: boolean[];
   bLocked: boolean[];
   fixedSums: Array<number | null>;
+  sumConstraintModes: AbUnionSumConstraintMode[];
   activeRegions: boolean[];
   labels: AbUnionLabel[];
   selectedMarkSources: AbUnionMarkSourceRef[];
@@ -136,6 +141,7 @@ export interface AbUnionRegionRow {
   aLocked: boolean;
   bLocked: boolean;
   fixedSum: number | null;
+  sumConstraintMode: AbUnionSumConstraintMode;
   state: 'active' | 'limit' | 'empty';
 }
 
@@ -166,6 +172,25 @@ export interface AbUnionFarPair {
   end: Point;
   distance: number;
   exceedsUnit: boolean;
+}
+
+interface AbUnionRenderOptions {
+  computeTheta?: boolean;
+}
+
+export interface AbUnionBoundaryRenderResult {
+  fMarkCount: number;
+  fMarkDistance: number | null;
+  fMarkTriangleSide: number | null;
+  edgeRows: AbUnionEdgeRow[];
+  regionRows: AbUnionRegionRow[];
+  activeLabel: string;
+}
+
+interface AbUnionInteractionCallbacks {
+  onPreviewChange?: () => void;
+  onCommitChange?: () => void;
+  moveDotValue?: (state: AbUnionState, dot: AbUnionDotHandle, value: number) => void;
 }
 
 interface MaskCache {
@@ -209,9 +234,9 @@ type PointerInteraction =
   | { kind: 'rotating-triangle'; startMouse: Point; startAngle: number; startPos: Point }
   | { kind: 'dragging-control'; startMouse: Point; startControl: Point };
 
-type AbUnionDotRole = 'left' | 'right' | 'shared';
+export type AbUnionDotRole = 'left' | 'right' | 'shared';
 
-interface AbUnionDotHandle {
+export interface AbUnionDotHandle {
   edge: number;
   role: AbUnionDotRole;
 }
@@ -457,6 +482,14 @@ export function containsAbUnionLocal(u: number, v: number, a: number, b: number)
 
 function inCornerSector(u: number, v: number): boolean {
   return u <= 1 + EPS && v <= 1 + EPS;
+}
+
+function inLocalHexFootprint(u: number, v: number): boolean {
+  return u >= -EPS &&
+    u <= 2 + EPS &&
+    v >= -EPS &&
+    v <= 2 + EPS &&
+    Math.abs(u - v) <= 1 + EPS;
 }
 
 function containsExactRegionLocal(
@@ -727,9 +760,9 @@ export function buildAbUnionLocalHexAxisHull(
 
   return buildHexAxisHullFromSamples(
     sampleCount,
-    (index) => Math.floor(index / samplesPerAxis) / steps,
-    (index) => (index % samplesPerAxis) / steps,
-    (_index, u, v) => containsConeRegion(u, v, outLen, inLen),
+    (index) => (2 * Math.floor(index / samplesPerAxis)) / steps,
+    (index) => (2 * (index % samplesPerAxis)) / steps,
+    (_index, u, v) => inLocalHexFootprint(u, v) && containsConeRegion(u, v, outLen, inLen),
     outLen,
     inLen,
     Math.max(0, margin),
@@ -1177,6 +1210,11 @@ export function deleteAbUnionLabel(state: AbUnionState, id: string): void {
   state.status = `Deleted ${id}.`;
 }
 
+export function requestAbUnionThetaOptimization(state: AbUnionState): void {
+  state.thetaOptimizationPending = true;
+  state.lastOptimized = null;
+}
+
 function nextFMarkId(state: AbUnionState): string {
   const used = new Set(state.fMarks.map((mark) => mark.id));
   let index = state.fMarks.length + 1;
@@ -1253,7 +1291,7 @@ function applyCoincidenceTarget(
   ) {
     return;
   }
-  setDotValue(state, { edge: normalizedEdge, role }, value);
+  setAbUnionDotValue(state, { edge: normalizedEdge, role }, value);
 }
 
 export function abUnionCoincidenceTargets(
@@ -1287,6 +1325,7 @@ export function snapAbUnionLabelToEdge(
   const label = labelForId(state, labelId);
   if (!label?.point || hexEdgeSource(label) !== mod6(edge)) return;
   applyCoincidenceTarget(state, edge, role, label.point);
+  requestAbUnionThetaOptimization(state);
   state.status = `Snapped ${role === 'shared' ? 'shared dot' : role} on e${mod6(edge)} to ${label.name}.`;
 }
 
@@ -1311,6 +1350,7 @@ export function setAbUnionCoincidenceLock(
   state.coincidenceLocks.push({ labelId, edge: mod6(edge), role });
   if (label.point) {
     applyCoincidenceTarget(state, edge, role, label.point);
+    requestAbUnionThetaOptimization(state);
   }
   state.status = `Locked ${role === 'shared' ? 'shared dot' : role} on e${mod6(edge)} to ${label.name}.`;
 }
@@ -1791,6 +1831,18 @@ function normalizeFixedSums(value: unknown): Array<number | null> {
   });
 }
 
+function normalizeSumConstraintModes(value: unknown, fixedSums: Array<number | null>): AbUnionSumConstraintMode[] {
+  const validModes: AbUnionSumConstraintMode[] = ['none', 'current', 'one', 'one-plus-delta'];
+  return Array.from({ length: 6 }, (_, index) => {
+    if (fixedSums[index] === null) return 'none';
+    if (!Array.isArray(value)) return 'current';
+    const mode = value[index];
+    return typeof mode === 'string' && validModes.includes(mode as AbUnionSumConstraintMode)
+      ? mode as AbUnionSumConstraintMode
+      : 'current';
+  });
+}
+
 function normalizeMarkSource(value: unknown): AbUnionMarkSourceRef | null {
   if (!value || typeof value !== 'object') return null;
   const ref = value as Partial<AbUnionMarkSourceRef>;
@@ -1895,10 +1947,22 @@ function normalizeAbUnionState(state: AbUnionState): void {
   state.centerLocked = Boolean(state.centerLocked);
   state.showOriginalRegion = legacy.showOriginalRegion ?? legacy.showRegion ?? true;
   state.useAxisAlignedHull = Boolean(state.useAxisAlignedHull);
+  state.autoOptimizeTheta = typeof state.autoOptimizeTheta === 'boolean' ? state.autoOptimizeTheta : true;
+  state.thetaOptimizationPending = typeof state.thetaOptimizationPending === 'boolean'
+    ? state.thetaOptimizationPending
+    : true;
   state.regionVisible = Array.from({ length: 6 }, (_, index) => state.regionVisible?.[index] ?? true);
   state.aLocked = normalizeLockArray(state.aLocked);
   state.bLocked = normalizeLockArray(state.bLocked);
   state.fixedSums = normalizeFixedSums(state.fixedSums);
+  state.sumConstraintModes = normalizeSumConstraintModes(state.sumConstraintModes, state.fixedSums);
+  for (let index = 0; index < 6; index++) {
+    if (state.sumConstraintModes[index] === 'none') {
+      state.fixedSums[index] = null;
+    } else if (state.sumConstraintModes[index] === 'one') {
+      state.fixedSums[index] = 1 - ONE_SUM_CONSTRAINT_TOLERANCE;
+    }
+  }
   state.activeRegions = normalizeLockArray(state.activeRegions);
   state.labels = normalizeLabels(state.labels);
   state.selectedMarkSources = Array.isArray(state.selectedMarkSources)
@@ -2273,38 +2337,40 @@ function solveAbUnionConstraints(state: AbUnionState, preferences: AbUnionPrefer
   return true;
 }
 
-function setBValue(state: AbUnionState, index: number, value: number): void {
+function setBValue(state: AbUnionState, index: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'b', index, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setAValue(state: AbUnionState, index: number, value: number): void {
+function setAValue(state: AbUnionState, index: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'a', index, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setSharedEdgeValue(state: AbUnionState, edgeIndex: number, value: number): void {
+function setSharedEdgeValue(state: AbUnionState, edgeIndex: number, value: number): boolean {
   if (solveAbUnionConstraints(state, [{ kind: 'b', index: edgeIndex, value }])) {
     state.lastOptimized = null;
-  } else {
-    state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+    return true;
   }
+  state.status = 'Cannot move dot: same-value and fixed-sum constraints conflict.';
+  return false;
 }
 
-function setDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): void {
+export function setAbUnionDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): boolean {
   if (dot.role === 'left') {
-    setBValue(state, dot.edge, value);
+    return setBValue(state, dot.edge, value);
   } else if (dot.role === 'right') {
-    setAValue(state, dot.edge + 1, 1 - value);
-  } else {
-    setSharedEdgeValue(state, dot.edge, value);
+    return setAValue(state, dot.edge + 1, 1 - value);
   }
+  return setSharedEdgeValue(state, dot.edge, value);
 }
 
 function addEdgeDot(state: AbUnionState, edgeIndex: number, value: number): void {
@@ -2316,7 +2382,7 @@ function addEdgeDot(state: AbUnionState, edgeIndex: number, value: number): void
   edge.left = Math.min(existing, nextValue);
   edge.right = Math.max(existing, nextValue);
   edge.split = true;
-  state.lastOptimized = null;
+  requestAbUnionThetaOptimization(state);
 }
 
 function deleteEdgeDot(state: AbUnionState, dot: AbUnionDotHandle): void {
@@ -2335,7 +2401,7 @@ function deleteEdgeDot(state: AbUnionState, dot: AbUnionDotHandle): void {
     state.status = 'Cannot delete dot: same-value and fixed-sum constraints conflict.';
     return;
   }
-  state.lastOptimized = null;
+  requestAbUnionThetaOptimization(state);
 }
 
 export function setAbUnionLock(
@@ -2349,6 +2415,7 @@ export function setAbUnionLock(
   const locks = kind === 'a' ? state.aLocked : state.bLocked;
   if (!locked) {
     locks[index] = false;
+    requestAbUnionThetaOptimization(state);
     return;
   }
   if (locks[index]) return;
@@ -2373,7 +2440,7 @@ export function setAbUnionLock(
     state.status = `Cannot lock ${kind}${index}: same-value and fixed-sum constraints conflict.`;
     return;
   }
-  state.lastOptimized = null;
+  requestAbUnionThetaOptimization(state);
 }
 
 function enforceAbUnionLocks(state: AbUnionState): void {
@@ -2383,19 +2450,55 @@ function enforceAbUnionLocks(state: AbUnionState): void {
 }
 
 export function setAbUnionFixedSum(state: AbUnionState, indexInput: number, fixed: boolean): void {
+  setAbUnionSumConstraint(state, indexInput, fixed ? 'current' : 'none', 0);
+}
+
+export function setAbUnionSumConstraint(
+  state: AbUnionState,
+  indexInput: number,
+  mode: AbUnionSumConstraintMode,
+  delta: number,
+): void {
   normalizeAbUnionState(state);
   const index = mod6(indexInput);
-  if (!fixed) {
+  if (mode === 'none') {
     state.fixedSums[index] = null;
+    state.sumConstraintModes[index] = 'none';
+    requestAbUnionThetaOptimization(state);
     return;
   }
 
   const previousFixedSums = state.fixedSums.slice();
-  state.fixedSums[index] = aValue(state, index) + bValue(state, index);
+  const previousModes = state.sumConstraintModes.slice();
+  state.sumConstraintModes[index] = mode;
+  state.fixedSums[index] = mode === 'current'
+    ? aValue(state, index) + bValue(state, index)
+    : mode === 'one'
+      ? 1 - ONE_SUM_CONSTRAINT_TOLERANCE
+      : 1 + delta;
   if (!solveAbUnionConstraints(state, [])) {
     state.fixedSums = previousFixedSums;
+    state.sumConstraintModes = previousModes;
     state.status = `Cannot fix a${index}+b${index}: same-value and fixed-sum constraints conflict.`;
+    return;
   }
+  requestAbUnionThetaOptimization(state);
+}
+
+export function refreshAbUnionDeltaConstraints(state: AbUnionState, delta: number): void {
+  normalizeAbUnionState(state);
+  const previousFixedSums = state.fixedSums.slice();
+  for (let index = 0; index < 6; index++) {
+    if (state.sumConstraintModes[index] === 'one-plus-delta') {
+      state.fixedSums[index] = 1 + delta;
+    }
+  }
+  if (!solveAbUnionConstraints(state, [])) {
+    state.fixedSums = previousFixedSums;
+    state.status = 'Cannot update delta: same-value and fixed-sum constraints conflict.';
+    return;
+  }
+  requestAbUnionThetaOptimization(state);
 }
 
 function edgeRowsForState(state: AbUnionState): AbUnionEdgeRow[] {
@@ -2425,6 +2528,7 @@ function regionRowsForState(state: AbUnionState): AbUnionRegionRow[] {
       aLocked: Boolean(state.aLocked[index]),
       bLocked: Boolean(state.bLocked[index]),
       fixedSum: state.fixedSums[index],
+      sumConstraintMode: state.sumConstraintModes[index],
       state: rowState,
     };
   });
@@ -2456,10 +2560,13 @@ export function createDefaultAbUnionState(): AbUnionState {
     showFarPair: true,
     clipToCornerSectors: false,
     useAxisAlignedHull: false,
+    autoOptimizeTheta: true,
+    thetaOptimizationPending: true,
     regionVisible: Array(6).fill(true),
     aLocked: Array(6).fill(false),
     bLocked: Array(6).fill(false),
     fixedSums: Array(6).fill(null),
+    sumConstraintModes: Array(6).fill('none'),
     activeRegions: Array(6).fill(false),
     labels: [],
     selectedMarkSources: [],
@@ -2491,7 +2598,27 @@ export function setAbUnionPreset(state: AbUnionState, preset: AbUnionPreset): vo
     state.status = 'Cannot apply preset: same-value and fixed-sum constraints conflict.';
     return;
   }
-  state.lastOptimized = null;
+  requestAbUnionThetaOptimization(state);
+}
+
+function optimizeThetaForMask(
+  cache: MaskCache,
+  thetaSamples: number,
+  quality: AbUnionQuality,
+): AbUnionOptimization & { vertices: Point[] | null; analysisCount: number } {
+  let best: AbUnionOptimization & { vertices: Point[] | null; analysisCount: number } = {
+    theta: 0,
+    L: Number.POSITIVE_INFINITY,
+    vertices: null,
+    analysisCount: 0,
+  };
+  const samples = Math.max(1, Math.floor(thetaSamples));
+  for (let i = 0; i < samples; i++) {
+    const theta = (ANGLE_PERIOD * i) / samples;
+    const candidate = computeThetaTriangle(cache, theta, quality);
+    if (candidate.L < best.L) best = candidate;
+  }
+  return best;
 }
 
 function evaluateState(
@@ -2508,14 +2635,7 @@ function evaluateState(
   tempState.showOriginalRegion = false;
   buildMask(cache, tempState);
 
-  let best: AbUnionOptimization = { theta: 0, L: Number.POSITIVE_INFINITY };
-  const samples = Math.max(1, Math.floor(thetaSamples));
-  for (let i = 0; i < samples; i++) {
-    const theta = (ANGLE_PERIOD * i) / samples;
-    const candidate = computeThetaTriangle(cache, theta, quality);
-    if (candidate.L < best.L) best = { theta, L: candidate.L };
-  }
-  return best;
+  return optimizeThetaForMask(cache, thetaSamples, quality);
 }
 
 export function optimizeAbUnionTheta(
@@ -2532,6 +2652,7 @@ export function renderAbUnion(
   state: AbUnionState,
   triangleState: TriangleState,
   localCs: number[],
+  options: AbUnionRenderOptions = {},
 ): AbUnionRenderResult {
   normalizeAbUnionState(state);
   enforceAbUnionLocks(state);
@@ -2541,7 +2662,23 @@ export function renderAbUnion(
   enforceAbUnionLocks(state);
   const uncoveredCount = buildMask(cache, state);
   ctx.drawImage(cache.offscreen, 0, 0, config.canvasSize, config.canvasSize);
-  const thetaResult = computeThetaTriangle(cache, state.theta, state.quality);
+  const computeTheta = options.computeTheta ?? true;
+  const shouldOptimizeTheta = computeTheta && state.autoOptimizeTheta && state.thetaOptimizationPending;
+  const thetaResult = computeTheta
+    ? shouldOptimizeTheta
+      ? optimizeThetaForMask(cache, 240, state.quality)
+      : computeThetaTriangle(cache, state.theta, state.quality)
+    : {
+        theta: state.theta,
+        L: state.lastOptimized?.L ?? 0,
+        vertices: null,
+        analysisCount: 0,
+      };
+  if (shouldOptimizeTheta) {
+    state.theta = thetaResult.theta;
+    state.lastOptimized = { theta: thetaResult.theta, L: thetaResult.L };
+    state.thetaOptimizationPending = false;
+  }
   const farPair = state.showFarPair ? findFarRedPair(cache) : null;
   const currentFMarkDistance = fMarkDistance(state);
   const currentFMarkTriangle = fMarkTriangle(state);
@@ -2567,6 +2704,29 @@ export function renderAbUnion(
     centerFailures: containment.failures,
     farPair,
     minEqualityGap: minEqualityGap(state),
+    fMarkCount: state.fMarks.length,
+    fMarkDistance: currentFMarkDistance,
+    fMarkTriangleSide: currentFMarkTriangle?.side ?? null,
+    edgeRows: edgeRowsForState(state),
+    regionRows: regionRowsForState(state),
+    activeLabel: activeLabel(state.activeRegions),
+  };
+}
+
+export function renderAbUnionBoundaryControls(
+  ctx: CanvasRenderingContext2D,
+  state: AbUnionState,
+  options: { showFMarkTriangle?: boolean } = {},
+): AbUnionBoundaryRenderResult {
+  normalizeAbUnionState(state);
+  enforceAbUnionLocks(state);
+  const currentFMarkDistance = fMarkDistance(state);
+  const currentFMarkTriangle = options.showFMarkTriangle === false ? null : fMarkTriangle(state);
+  drawPointsAndVertices(ctx, state);
+  drawFMarkDistance(ctx, state, currentFMarkDistance);
+  drawFMarkOverlay(ctx, state, currentFMarkTriangle);
+
+  return {
     fMarkCount: state.fMarks.length,
     fMarkDistance: currentFMarkDistance,
     fMarkTriangleSide: currentFMarkTriangle?.side ?? null,
@@ -2898,10 +3058,19 @@ export function setupAbUnionInteraction(
   getLocalCs: () => number[],
   onLocalCChange: (index: number, value: number) => void,
   render: () => void,
+  callbacks: AbUnionInteractionCallbacks = {},
 ): void {
   let interaction: PointerInteraction = { kind: 'idle' };
   let activePointerId: number | null = null;
   let activePointerType = 'mouse';
+
+  function moveDotValue(state: AbUnionState, dot: AbUnionDotHandle, value: number): void {
+    if (callbacks.moveDotValue) {
+      callbacks.moveDotValue(state, dot, value);
+    } else {
+      setAbUnionDotValue(state, dot, value);
+    }
+  }
 
   function stop(): void {
     interaction = { kind: 'idle' };
@@ -2957,12 +3126,14 @@ export function setupAbUnionInteraction(
     if (state.tool === 'add' && (hit?.kind === 'edge' || hit?.kind === 'dot')) {
       const edgeIndex = hit.kind === 'edge' ? hit.index : hit.dot.edge;
       addEdgeDot(state, edgeIndex, projectEdgeValue(mouse, edgeIndex));
+      callbacks.onCommitChange?.();
       render();
       event.preventDefault();
       return;
     }
     if (state.tool === 'delete' && hit?.kind === 'dot') {
       deleteEdgeDot(state, hit.dot);
+      callbacks.onCommitChange?.();
       render();
       event.preventDefault();
       return;
@@ -2970,7 +3141,8 @@ export function setupAbUnionInteraction(
 
     if (state.tool === 'move' && hit?.kind === 'dot') {
       interaction = { kind: 'dragging-dot', dot: hit.dot, startMouse: mouse, moved: false };
-      setDotValue(state, hit.dot, projectEdgeValue(mouse, hit.dot.edge));
+      moveDotValue(state, hit.dot, projectEdgeValue(mouse, hit.dot.edge));
+      callbacks.onPreviewChange?.();
       render();
     } else if (hit?.kind === 'local-c') {
       interaction = { kind: 'dragging-local-c', index: hit.index };
@@ -3040,7 +3212,8 @@ export function setupAbUnionInteraction(
     if (interaction.kind === 'dragging-dot') {
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
-      setDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
+      moveDotValue(state, interaction.dot, projectEdgeValue(mouse, interaction.dot.edge));
+      callbacks.onPreviewChange?.();
     } else if (interaction.kind === 'dragging-f-mark') {
       interaction.moved = interaction.moved
         || distance(mouse, interaction.startMouse) > scaleToMath(CLICK_CANCEL_PX * getHitScale(pointerType));
@@ -3094,6 +3267,11 @@ export function setupAbUnionInteraction(
       render();
     } else if (interaction.kind === 'dragging-dot' && !interaction.moved) {
       handleClick(state, { kind: 'dot', dot: interaction.dot });
+      callbacks.onCommitChange?.();
+      render();
+    } else if (interaction.kind === 'dragging-dot' && interaction.moved) {
+      requestAbUnionThetaOptimization(state);
+      callbacks.onCommitChange?.();
       render();
     }
 

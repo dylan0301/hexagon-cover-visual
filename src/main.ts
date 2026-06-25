@@ -105,10 +105,13 @@ import {
   deleteSelectedAbUnionFMark,
   optimizeAbUnionTheta,
   renderAbUnion,
+  renderAbUnionBoundaryControls,
+  requestAbUnionThetaOptimization,
+  refreshAbUnionDeltaConstraints,
   setAbUnionCoincidenceLock,
-  setAbUnionFixedSum,
   setAbUnionLock,
   setAbUnionPreset,
+  setAbUnionSumConstraint,
   setAbUnionTool,
   snapAbUnionLabelToEdge,
   setupAbUnionInteraction,
@@ -116,7 +119,10 @@ import {
   type AbUnionCoincidenceRole,
   type AbUnionPreset,
   type AbUnionQuality,
+  type AbUnionBoundaryRenderResult,
   type AbUnionRenderResult,
+  type AbUnionState,
+  type AbUnionSumConstraintMode,
   type AbUnionTool,
 } from './abUnion';
 import {
@@ -137,9 +143,21 @@ import {
 } from './abHullDebug';
 import {
   createDefaultConj0521State,
+  createDefaultConj0525State,
+  moveConj0521Dot,
+  moveConj0525Dot,
   renderConj0521,
+  renderConj0525,
+  type Conj0521Options,
   type Conj0521RenderResult,
+  type Conj0525Options,
 } from './conj0521';
+import {
+  areaConjRequiredPoints,
+  computeAreaConjResult,
+  type AreaConjQuality,
+  type AreaConjResult,
+} from './areaConjecture';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -227,8 +245,38 @@ let currentCSample: CSample | RejectedSample | null = null;
 let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
+let areaConjState = createDefaultAbUnionState();
 let conj0521State = createDefaultConj0521State();
+let conj0525State = createDefaultConj0525State();
+let conj0521Options: Conj0521Options = { hardLimitDrag: false };
+let conj0525Options: Conj0525Options = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
+let areaConstraintDelta = 0.000001;
+
+interface MaxAreaState {
+  a: number;
+  b: number;
+  quality: AreaConjQuality;
+  t3Like: boolean;
+  result: AreaConjResult;
+  dirty: boolean;
+  sumConstraintMode: AbUnionSumConstraintMode;
+}
+
+const maxAreaState: MaxAreaState = {
+  a: 0.2,
+  b: 0.5,
+  quality: 'coarse',
+  t3Like: false,
+  result: computeAreaConjResult(0, 0.2, 0.5, 'coarse'),
+  dirty: false,
+  sumConstraintMode: 'none',
+};
+
+let areaConjQuality: AreaConjQuality = 'coarse';
+let areaConjT3Like = Array<boolean>(6).fill(false);
+let areaConjResults: AreaConjResult[] = [];
+let areaConjDirty = true;
 
 interface ControllerSnapshot {
   version: 4;
@@ -688,7 +736,10 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'free' ||
     value === 'ab-union' ||
     value === 'ab-hull-debug' ||
-    value === 'conj-0521';
+    value === 'max-area' ||
+    value === 'area-conj' ||
+    value === 'conj-0521' ||
+    value === 'conj-0525';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -2217,6 +2268,7 @@ function abUnionOverlayLabel(): string {
 
 function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const thetaDeg = abUnionState.theta * 180 / Math.PI;
+  const thetaManualDisabled = abUnionState.autoOptimizeTheta ? ' disabled' : '';
   const lastOptimized = abUnionState.lastOptimized
     ? `best L*=${abUnionState.lastOptimized.L.toFixed(5)} at ${formatAbUnionDegrees(abUnionState.lastOptimized.theta)}`
     : 'best L*: not optimized';
@@ -2255,20 +2307,27 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
   const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark', 'f-mark'] as AbUnionTool[]).map((tool) => `
     <button type="button" class="free-button${abUnionState.tool === tool ? ' is-active' : ''}" data-ab-tool="${tool}">${toolLabels[tool]}</button>
   `).join('');
-  const regionRowsHtml = result.regionRows.map((row) => `
-    <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
-      <td>R${row.index}</td>
-      <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
-      <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
-      <td><input type="checkbox" title="fix current a${row.index}+b${row.index}${row.fixedSum === null ? '' : ` = ${row.fixedSum.toFixed(4)}`}" data-ab-fixed-sum="${row.index}"${row.fixedSum !== null ? ' checked' : ''}/></td>
-      <td>${row.a.toFixed(4)}</td>
-      <td>${row.b.toFixed(4)}</td>
-      <td>${row.sum.toFixed(4)}</td>
-      <td>${row.distance.toFixed(4)}</td>
-      <td>${row.equality ? 'yes' : 'no'}</td>
-      <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
-    </tr>
-  `).join('');
+  const regionRowsHtml = result.regionRows.map((row) => {
+    const currentTitle = row.sumConstraintMode === 'current' && row.fixedSum !== null
+      ? `fix current a${row.index}+b${row.index} = ${row.fixedSum.toFixed(4)}`
+      : `fix current a${row.index}+b${row.index}`;
+    return `
+      <tr class="${abUnionState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.equality ? ' ab-union-equality-row' : ''}">
+        <td>R${row.index}</td>
+        <td><input type="checkbox" title="include a${row.index} in the same-a group" data-ab-lock-kind="a" data-ab-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="include b${row.index} in the same-b group" data-ab-lock-kind="b" data-ab-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="${currentTitle}" data-ab-sum-mode="current" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'current' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = 1" data-ab-sum-mode="one" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'one' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = ${formatAreaNumber(1 + areaConstraintDelta)}" data-ab-sum-mode="one-plus-delta" data-ab-sum-index="${row.index}"${row.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/></td>
+        <td>${row.a.toFixed(4)}</td>
+        <td>${row.b.toFixed(4)}</td>
+        <td>${row.sum.toFixed(4)}</td>
+        <td>${row.distance.toFixed(4)}</td>
+        <td>${row.equality ? 'yes' : 'no'}</td>
+        <td><span class="ab-union-pill ${row.state}">${row.state}</span></td>
+      </tr>
+    `;
+  }).join('');
   const edgeRowsHtml = result.edgeRows.map((row) => `
     <tr>
       <td>e${row.index}</td>
@@ -2303,6 +2362,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <label><input type="checkbox" data-ab-show-original${abUnionState.showOriginalRegion ? ' checked' : ''}/>original AB union</label>
       <label><input type="checkbox" data-ab-axis-hull${abUnionState.useAxisAlignedHull ? ' checked' : ''}/>hex-axis hull</label>
       <label><input type="checkbox" data-ab-show-theta${abUnionState.showThetaTriangle ? ' checked' : ''}/>show purple triangle</label>
+      <label><input type="checkbox" data-ab-auto-theta${abUnionState.autoOptimizeTheta ? ' checked' : ''}/>auto optimize theta</label>
       <label><input type="checkbox" data-ab-show-far-pair${abUnionState.showFarPair ? ' checked' : ''}/>show red pair &gt; 1</label>
       <label><input type="checkbox" data-ab-clip-sectors${abUnionState.clipToCornerSectors ? ' checked' : ''}/>clip to corner sectors</label>
       <label><input type="checkbox" data-ab-center-locked${abUnionState.centerLocked ? ' checked' : ''}/>lock center</label>
@@ -2329,13 +2389,14 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-ab-preset="equality">equality</button>
       <button type="button" class="free-button" data-ab-preset="midpoint">midpoints</button>
+      ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-row">
       <label for="ab-union-theta">theta = <span>${thetaDeg.toFixed(1)} deg</span></label>
-      <input id="ab-union-theta" type="range" min="0" max="120" step="0.5" value="${thetaDeg.toFixed(1)}" data-ab-theta/>
+      <input id="ab-union-theta" type="range" min="0" max="120" step="0.5" value="${thetaDeg.toFixed(1)}" data-ab-theta${thetaManualDisabled}/>
     </div>
     <div class="ab-union-toolbar">
-      <button type="button" class="free-button" data-ab-optimize>optimize theta</button>
+      <button type="button" class="free-button" data-ab-optimize${thetaManualDisabled}>optimize theta</button>
     </div>
     <div class="ab-union-readout">
       <span>L(theta)</span><strong>${result.currentL.toFixed(5)}</strong>
@@ -2350,6 +2411,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>region clip</span><strong>${abUnionState.clipToCornerSectors ? 'corner sectors' : 'off'}</strong>
       <span>compute model</span><strong>${abUnionState.useAxisAlignedHull ? 'hex-axis hull' : 'exact'}</strong>
       <span>visible overlays</span><strong>${escapeHtml(abUnionOverlayLabel())}</strong>
+      <span>theta mode</span><strong>${abUnionState.autoOptimizeTheta ? 'auto' : 'manual'}</strong>
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
@@ -2363,10 +2425,46 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
     </table>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
-      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix a+b</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
+      <thead><tr><th>R_i</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>d_i</th><th>eq?</th><th>state</th></tr></thead>
       <tbody>${regionRowsHtml}</tbody>
     </table>
   `;
+}
+
+const AB_HULL_DEBUG_PARAM_STEP = '0.000001';
+const AB_HULL_DEBUG_WHEEL_STEP = 0.001;
+
+function isAbHullDebugParam(value: string | undefined): value is 'a' | 'b' {
+  return value === 'a' || value === 'b';
+}
+
+function formatAbHullDebugParameter(value: number): string {
+  return value.toFixed(6);
+}
+
+function applyAbHullDebugParameterInput(target: HTMLInputElement): boolean {
+  const debugParam = target.dataset.hullDebugParam;
+  if (!isAbHullDebugParam(debugParam)) return false;
+  setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
+  return true;
+}
+
+function syncAbHullDebugParameterControls(): void {
+  const values = {
+    a: formatAbHullDebugParameter(abHullDebugState.a),
+    b: formatAbHullDebugParameter(abHullDebugState.b),
+  };
+  for (const key of ['a', 'b'] as const) {
+    abUnionControls
+      .querySelectorAll<HTMLInputElement>(`input[data-hull-debug-param="${key}"]`)
+      .forEach((input) => {
+        input.value = values[key];
+      });
+  }
+  const sum = abUnionControls.querySelector<HTMLElement>('[data-hull-debug-sum]');
+  if (sum) {
+    sum.textContent = `a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}`;
+  }
 }
 
 function renderAbHullDebugPanel(result: AbHullDebugResult): void {
@@ -2379,25 +2477,28 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
       : `misses ${result.missedCount} of ${result.sampleCount}`
     : `${result.sampleCount} exact samples; polygon open`;
   const exportCount = abHullDebugState.exports.length;
+  const noSuggestedHull = abHullDebugState.a + abHullDebugState.b >= 1 - 1e-9;
+  const aValue = formatAbHullDebugParameter(abHullDebugState.a);
+  const bValue = formatAbHullDebugParameter(abHullDebugState.b);
 
   abUnionControls.innerHTML = `
     <div class="ab-union-toolbar">
       <label>a
-        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(2)}" data-hull-debug-param="a"/>
+        <input type="range" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${aValue}" data-hull-debug-param="a"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.a.toFixed(3)}" data-hull-debug-param="a"/>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${aValue}" data-hull-debug-param="a"/>
       <label>b
-        <input type="range" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(2)}" data-hull-debug-param="b"/>
+        <input type="range" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${bValue}" data-hull-debug-param="b"/>
       </label>
-      <input class="ab-hull-debug-number" type="number" min="0" max="0.98" step="0.01" value="${abHullDebugState.b.toFixed(3)}" data-hull-debug-param="b"/>
-      <span class="free-small-status">a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}</span>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AB_HULL_DEBUG_PARAM_STEP}" value="${bValue}" data-hull-debug-param="b"/>
+      <span class="free-small-status" data-hull-debug-sum>a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}</span>
     </div>
     <div class="ab-union-toolbar">
       <button type="button" class="free-button" data-hull-debug-close${abHullDebugState.vertices.length >= 3 && !abHullDebugState.closed ? '' : ' disabled'}>close polygon</button>
       <button type="button" class="free-button" data-hull-debug-undo${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>undo</button>
       <button type="button" class="free-button" data-hull-debug-delete${abHullDebugState.selectedIndex !== null && (!abHullDebugState.closed || abHullDebugState.vertices.length > 3) ? '' : ' disabled'}>delete selected dot</button>
       <button type="button" class="free-button" data-hull-debug-clear${abHullDebugState.vertices.length > 0 ? '' : ' disabled'}>clear</button>
-      <button type="button" class="free-button" data-hull-debug-suggested>load suggested hull</button>
+      <button type="button" class="free-button" data-hull-debug-suggested${noSuggestedHull ? ' disabled' : ''}>load suggested hull</button>
       <button type="button" class="free-button" data-hull-debug-reset>reset example</button>
     </div>
     <div class="ab-union-toolbar">
@@ -2419,7 +2520,449 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
   `;
 }
 
-function renderConj0521Panel(result: Conj0521RenderResult): void {
+const AREA_PARAM_STEP = '0.000001';
+const AREA_WHEEL_STEP = 0.001;
+const AREA_DELTA_STEP = '0.0001';
+const AREA_DELTA_MIN = 0.000001;
+const AREA_DELTA_MAX = 0.159999;
+const AREA_ONE_SUM_CONSTRAINT_TOLERANCE = 1e-12;
+const AREA_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6'];
+
+function isAreaQuality(value: string): value is AreaConjQuality {
+  return value === 'coarse' || value === 'high';
+}
+
+function isAreaSumConstraintMode(value: string | undefined): value is AbUnionSumConstraintMode {
+  return value === 'none' || value === 'current' || value === 'one' || value === 'one-plus-delta';
+}
+
+function isMaxAreaParam(value: string | undefined): value is 'a' | 'b' {
+  return value === 'a' || value === 'b';
+}
+
+function formatAreaNumber(value: number): string {
+  return value.toFixed(6);
+}
+
+function clampAreaDelta(value: number): number {
+  if (!Number.isFinite(value)) return areaConstraintDelta;
+  return Math.max(AREA_DELTA_MIN, Math.min(AREA_DELTA_MAX, value));
+}
+
+function areaSumTarget(mode: AbUnionSumConstraintMode): number | null {
+  if (mode === 'one') return 1 - AREA_ONE_SUM_CONSTRAINT_TOLERANCE;
+  if (mode === 'one-plus-delta') return 1 + areaConstraintDelta;
+  return null;
+}
+
+function areaSumModeText(mode: AbUnionSumConstraintMode): string {
+  if (mode === 'current') return 'current';
+  if (mode === 'one') return 'a+b=1';
+  if (mode === 'one-plus-delta') return `a+b=${formatAreaNumber(1 + areaConstraintDelta)}`;
+  return 'off';
+}
+
+function areaDeltaControlHtml(): string {
+  return `
+    <label>delta
+      <input class="ab-hull-debug-number" type="number" min="${AREA_DELTA_MIN}" max="${AREA_DELTA_MAX}" step="${AREA_DELTA_STEP}" value="${formatAreaNumber(areaConstraintDelta)}" data-area-delta/>
+    </label>
+  `;
+}
+
+function setAreaConstraintDelta(rawValue: number): boolean {
+  if (!Number.isFinite(rawValue)) return false;
+  areaConstraintDelta = clampAreaDelta(rawValue);
+  refreshAbUnionDeltaConstraints(abUnionState, areaConstraintDelta);
+  refreshAbUnionDeltaConstraints(areaConjState, areaConstraintDelta);
+  if (maxAreaState.sumConstraintMode === 'one-plus-delta') {
+    applyMaxAreaSumConstraint('a');
+    recomputeMaxArea();
+  }
+  if (areaConjState.sumConstraintModes.includes('one-plus-delta')) {
+    markAreaConjDirty();
+    recomputeAreaConjResults();
+  }
+  return true;
+}
+
+function applyAreaDeltaInput(target: HTMLInputElement): boolean {
+  if (target.dataset.areaDelta === undefined) return false;
+  const updated = setAreaConstraintDelta(Number(target.value));
+  target.value = formatAreaNumber(areaConstraintDelta);
+  return updated;
+}
+
+function clampAreaPartForTarget(value: number, target: number): number {
+  return Math.max(Math.max(0, target - 1), Math.min(Math.min(1, target), value));
+}
+
+function applyMaxAreaSumConstraint(preserve: 'a' | 'b'): void {
+  const target = areaSumTarget(maxAreaState.sumConstraintMode);
+  if (target === null) return;
+  const preserved = clampAreaPartForTarget(maxAreaState[preserve], target);
+  maxAreaState[preserve] = preserved;
+  maxAreaState[preserve === 'a' ? 'b' : 'a'] = clamp01(target - preserved);
+  maxAreaState.dirty = true;
+}
+
+function applyMaxAreaParameterInput(target: HTMLInputElement, commit: boolean): boolean {
+  const param = target.dataset.maxAreaParam;
+  if (!isMaxAreaParam(param)) return false;
+  setMaxAreaParameter(param, Number(target.value), commit);
+  return true;
+}
+
+function setMaxAreaParameter(key: 'a' | 'b', rawValue: number, commit: boolean): void {
+  if (!Number.isFinite(rawValue)) return;
+  const target = areaSumTarget(maxAreaState.sumConstraintMode);
+  if (target === null) {
+    maxAreaState[key] = clamp01(rawValue);
+  } else {
+    const value = clampAreaPartForTarget(rawValue, target);
+    maxAreaState[key] = value;
+    maxAreaState[key === 'a' ? 'b' : 'a'] = clamp01(target - value);
+  }
+  maxAreaState.dirty = true;
+  if (commit) {
+    recomputeMaxArea();
+  }
+}
+
+function setMaxAreaSumConstraint(mode: AbUnionSumConstraintMode): void {
+  maxAreaState.sumConstraintMode = mode === 'current' ? 'none' : mode;
+  applyMaxAreaSumConstraint('a');
+  recomputeMaxArea();
+}
+
+function recomputeMaxArea(): void {
+  maxAreaState.result = computeAreaConjResult(0, maxAreaState.a, maxAreaState.b, maxAreaState.quality, maxAreaState.t3Like);
+  maxAreaState.dirty = false;
+}
+
+function markAreaConjDirty(): void {
+  areaConjDirty = true;
+}
+
+function recomputeAreaConjResults(): void {
+  const aValues = abUnionAValues(areaConjState);
+  const bValues = abUnionBValues(areaConjState);
+  areaConjResults = Array.from({ length: 6 }, (_, index) =>
+    computeAreaConjResult(index, aValues[index], bValues[index], areaConjQuality, areaConjT3Like[index] ?? false),
+  );
+  areaConjDirty = false;
+}
+
+function ensureAreaConjResults(): void {
+  if (areaConjResults.length !== 6) {
+    recomputeAreaConjResults();
+  }
+}
+
+function drawAreaPolygon(
+  ctx2d: CanvasRenderingContext2D,
+  points: Point[],
+  stroke: string,
+  fill: string,
+  lineWidth = 2,
+): void {
+  if (points.length === 0) return;
+  const canvasPoints = points.map(mathToCanvas);
+  ctx2d.beginPath();
+  ctx2d.moveTo(canvasPoints[0].x, canvasPoints[0].y);
+  for (const point of canvasPoints.slice(1)) {
+    ctx2d.lineTo(point.x, point.y);
+  }
+  ctx2d.closePath();
+  ctx2d.fillStyle = fill;
+  ctx2d.strokeStyle = stroke;
+  ctx2d.lineWidth = lineWidth;
+  ctx2d.fill();
+  ctx2d.stroke();
+}
+
+function drawAreaMarker(ctx2d: CanvasRenderingContext2D, point: Point, label: string, color: string): void {
+  const canvasPoint = mathToCanvas(point);
+  ctx2d.beginPath();
+  ctx2d.arc(canvasPoint.x, canvasPoint.y, 4.7, 0, 2 * Math.PI);
+  ctx2d.fillStyle = '#ffffff';
+  ctx2d.fill();
+  ctx2d.strokeStyle = color;
+  ctx2d.lineWidth = 1.8;
+  ctx2d.stroke();
+  ctx2d.fillStyle = color;
+  ctx2d.font = '12px monospace';
+  ctx2d.fillText(label, canvasPoint.x + 6, canvasPoint.y - 6);
+}
+
+function drawAreaConjResult(ctx2d: CanvasRenderingContext2D, result: AreaConjResult, color: string): void {
+  if (!result.triangle) return;
+  drawAreaPolygon(ctx2d, result.triangle.vertices, color, `${color}16`, 1.8);
+  drawAreaPolygon(ctx2d, result.triangle.intersection, color, `${color}24`, 1.2);
+  const center = mathToCanvas(result.triangle.center);
+  ctx2d.fillStyle = color;
+  ctx2d.font = '12px monospace';
+  ctx2d.fillText(`f${result.index}`, center.x + 5, center.y - 5);
+}
+
+function drawMaxAreaMode(ctx2d: CanvasRenderingContext2D): void {
+  drawHexagon(ctx2d);
+  const required = areaConjRequiredPoints(0, maxAreaState.a, maxAreaState.b);
+  if (!maxAreaState.dirty) {
+    drawAreaConjResult(ctx2d, maxAreaState.result, '#0ea5e9');
+  }
+  drawAreaMarker(ctx2d, required.vertex, 'V0', '#0f172a');
+  drawAreaMarker(ctx2d, required.aPoint, 'a', '#d97706');
+  drawAreaMarker(ctx2d, required.bPoint, 'b', '#2563eb');
+}
+
+function syncMaxAreaParameterControls(): void {
+  const values = {
+    a: formatAreaNumber(maxAreaState.a),
+    b: formatAreaNumber(maxAreaState.b),
+  };
+  for (const key of ['a', 'b'] as const) {
+    abUnionControls
+      .querySelectorAll<HTMLInputElement>(`input[data-max-area-param="${key}"]`)
+      .forEach((input) => {
+        input.value = values[key];
+      });
+  }
+  const recompute = abUnionControls.querySelector<HTMLButtonElement>('[data-max-area-recompute]');
+  if (recompute) {
+    recompute.disabled = !maxAreaState.dirty;
+  }
+}
+
+function renderMaxAreaCanvasAndReadouts(): void {
+  ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+  drawMaxAreaMode(ctx);
+
+  gammaValues.textContent = `max area: a=${formatAreaNumber(maxAreaState.a)}, b=${formatAreaNumber(maxAreaState.b)}, a+b=${formatAreaNumber(maxAreaState.a + maxAreaState.b)}`;
+  localCBounds.textContent = `f(a,b)=${formatAreaNumber(maxAreaState.result.f)}, 1-f=${formatAreaNumber(maxAreaState.result.deficit)}`;
+  localCValues.textContent = maxAreaState.dirty
+    ? 'stale: recompute after commit'
+    : `quality=${maxAreaState.quality}, constraint=${areaSumModeText(maxAreaState.sumConstraintMode)}, T3-like=${maxAreaState.t3Like ? 'on' : 'off'}, evaluations=${maxAreaState.result.evaluations}`;
+  ceStatus.textContent = 'Max Area: CE/g-chain inactive';
+  ceStatus.style.color = '#475569';
+  ceChainStatus.textContent = maxAreaState.result.feasible ? 'realizing triangle found' : 'infeasible; using f=0';
+  ceChainStatus.style.color = maxAreaState.result.feasible ? '#047857' : '#b91c1c';
+  coverOverlayStatus.textContent = 'Max Area owns triangle overlay';
+  coverOverlayStatus.style.color = '#64748b';
+}
+
+function renderMaxAreaPanel(): void {
+  const result = maxAreaState.result;
+  const status = maxAreaState.dirty
+    ? 'stale: release slider or press Enter to recompute'
+    : result.feasible ? 'ready' : 'infeasible; using f=0';
+  const statusClass = maxAreaState.dirty ? 'ab-union-pill is-warn' : result.feasible ? 'ab-union-pill is-good' : 'ab-union-pill empty';
+  const triangleText = result.triangle
+    ? `center=(${result.triangle.center.x.toFixed(4)}, ${result.triangle.center.y.toFixed(4)}), theta=${(result.triangle.phi * 180 / Math.PI).toFixed(2)} deg`
+    : 'none';
+  const constraintText = areaSumModeText(maxAreaState.sumConstraintMode);
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-toolbar">
+      <label>a
+        <input type="range" min="0" max="1" step="${AREA_PARAM_STEP}" value="${formatAreaNumber(maxAreaState.a)}" data-max-area-param="a"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AREA_PARAM_STEP}" value="${formatAreaNumber(maxAreaState.a)}" data-max-area-param="a"/>
+      <label>b
+        <input type="range" min="0" max="1" step="${AREA_PARAM_STEP}" value="${formatAreaNumber(maxAreaState.b)}" data-max-area-param="b"/>
+      </label>
+      <input class="ab-hull-debug-number" type="number" min="0" max="1" step="${AREA_PARAM_STEP}" value="${formatAreaNumber(maxAreaState.b)}" data-max-area-param="b"/>
+      <label>quality
+        <select data-max-area-quality>
+          <option value="coarse"${maxAreaState.quality === 'coarse' ? ' selected' : ''}>coarse</option>
+          <option value="high"${maxAreaState.quality === 'high' ? ' selected' : ''}>high</option>
+        </select>
+      </label>
+      <label><input type="checkbox" data-max-area-t3-like${maxAreaState.t3Like ? ' checked' : ''}/>T3-like</label>
+      <button type="button" class="free-button" data-max-area-recompute${maxAreaState.dirty ? '' : ' disabled'}>recompute</button>
+    </div>
+    <div class="ab-union-toolbar">
+      <span>sum constraint</span>
+      <label><input type="checkbox" data-max-area-sum-mode="one"${maxAreaState.sumConstraintMode === 'one' ? ' checked' : ''}/>a+b=1</label>
+      <label><input type="checkbox" data-max-area-sum-mode="one-plus-delta"${maxAreaState.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/>a+b=1+delta</label>
+      ${areaDeltaControlHtml()}
+    </div>
+    <div class="ab-union-readout">
+      <span>status</span><strong><span class="${statusClass}">${escapeHtml(status)}</span></strong>
+      <span>a</span><strong>${formatAreaNumber(maxAreaState.a)}</strong>
+      <span>b</span><strong>${formatAreaNumber(maxAreaState.b)}</strong>
+      <span>a+b</span><strong>${formatAreaNumber(maxAreaState.a + maxAreaState.b)}</strong>
+      <span>constraint</span><strong>${escapeHtml(constraintText)}</strong>
+      <span>T3-like</span><strong>${maxAreaState.t3Like ? 'on' : 'off'}</strong>
+      <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
+      <span>f(a,b)</span><strong>${formatAreaNumber(result.f)}</strong>
+      <span>1-f(a,b)</span><strong>${formatAreaNumber(result.deficit)}</strong>
+      <span>quality</span><strong>${escapeHtml(maxAreaState.quality)}</strong>
+      <span>evaluations</span><strong>${result.evaluations}</strong>
+      <span>realizer</span><strong>${escapeHtml(triangleText)}</strong>
+    </div>
+  `;
+}
+
+function areaConjToolText(tool: AbUnionTool): string {
+  if (tool === 'd-mark') return 'd-mark';
+  if (tool === 's-mark') return 's-mark';
+  if (tool === 'f-mark') return 'f mark';
+  return tool[0].toUpperCase() + tool.slice(1);
+}
+
+function areaConjFMarkText(result: AbUnionBoundaryRenderResult | null): string {
+  if (!result || result.fMarkCount === 0) return 'none';
+  if (result.fMarkDistance !== null) return `distance=${result.fMarkDistance.toFixed(5)}`;
+  return `${result.fMarkCount} dot${result.fMarkCount === 1 ? '' : 's'}`;
+}
+
+function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
+  ensureAreaConjResults();
+  const toolControls = (['move', 'add', 'delete', 'd-mark', 's-mark', 'f-mark'] as AbUnionTool[]).map((tool) => {
+    const disabled = tool === 'd-mark' || tool === 's-mark';
+    return `
+      <button type="button" class="free-button${areaConjState.tool === tool ? ' is-active' : ''}" data-area-tool="${tool}"${disabled ? ' disabled' : ''}>${areaConjToolText(tool)}</button>
+    `;
+  }).join('');
+  const totalF = areaConjResults.reduce((sum, result) => sum + result.f, 0);
+  const totalDeficit = areaConjResults.reduce((sum, result) => sum + result.deficit, 0);
+  const infeasibleCount = areaConjResults.filter((result) => !result.feasible).length;
+  const gtOneCount = boundary.regionRows.filter((row) => row.sum > 1 + 1e-9).length;
+  const t3LikeCount = areaConjT3Like.filter(Boolean).length;
+  const staleText = areaConjDirty ? 'stale: current dots changed; f rows update after commit' : 'ready';
+  const staleClass = areaConjDirty ? 'ab-union-pill is-warn' : 'ab-union-pill is-good';
+  const regionRowsHtml = boundary.regionRows.map((row) => {
+    const result = areaConjResults[row.index];
+    const feasibleClass = result?.feasible ? 'active' : 'empty';
+    const currentTitle = row.sumConstraintMode === 'current' && row.fixedSum !== null
+      ? `fix current a${row.index}+b${row.index} = ${row.fixedSum.toFixed(4)}`
+      : `fix current a${row.index}+b${row.index}`;
+    return `
+      <tr class="${areaConjState.activeRegions[row.index] ? 'ab-union-active-row' : ''}${row.sum > 1 + 1e-9 ? ' ab-union-equality-row' : ''}">
+        <td>R${row.index}</td>
+        <td><input type="checkbox" title="constrain f${row.index} to T3-like triangles" data-area-t3-index="${row.index}"${areaConjT3Like[row.index] ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="include a${row.index} in the same-a group" data-area-lock-kind="a" data-area-lock-index="${row.index}"${row.aLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="include b${row.index} in the same-b group" data-area-lock-kind="b" data-area-lock-index="${row.index}"${row.bLocked ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="${currentTitle}" data-area-sum-mode="current" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'current' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = 1" data-area-sum-mode="one" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'one' ? ' checked' : ''}/></td>
+        <td><input type="checkbox" title="fix a${row.index}+b${row.index} = ${formatAreaNumber(1 + areaConstraintDelta)}" data-area-sum-mode="one-plus-delta" data-area-sum-index="${row.index}"${row.sumConstraintMode === 'one-plus-delta' ? ' checked' : ''}/></td>
+        <td>${row.a.toFixed(4)}</td>
+        <td>${row.b.toFixed(4)}</td>
+        <td>${row.sum.toFixed(4)}</td>
+        <td>${result ? result.f.toFixed(6) : '0.000000'}</td>
+        <td>${result ? result.deficit.toFixed(6) : '1.000000'}</td>
+        <td><span class="ab-union-pill ${feasibleClass}">${result?.feasible ? 'ok' : 'f=0'}</span></td>
+      </tr>
+    `;
+  }).join('');
+  const edgeRowsHtml = boundary.edgeRows.map((row) => `
+    <tr>
+      <td>e${row.index}</td>
+      <td>${row.split ? 'two' : 'one'}</td>
+      <td>${row.left.toFixed(4)}</td>
+      <td>${row.right.toFixed(4)}</td>
+    </tr>
+  `).join('');
+
+  abUnionControls.innerHTML = `
+    <div class="ab-union-toolbar">
+      <span>tool</span>
+      ${toolControls}
+    </div>
+    <div class="ab-union-toolbar">
+      <span>f marks</span>
+      <button type="button" class="free-button" data-area-fmark-delete${areaConjState.selectedFMarkId ? '' : ' disabled'}>delete selected</button>
+      <button type="button" class="free-button" data-area-fmark-clear${boundary.fMarkCount > 0 ? '' : ' disabled'}>clear</button>
+      <span class="free-small-status">${escapeHtml(areaConjFMarkText(boundary))}</span>
+    </div>
+    <div class="ab-union-toolbar">
+      <label>quality
+        <select data-area-quality>
+          <option value="coarse"${areaConjQuality === 'coarse' ? ' selected' : ''}>coarse</option>
+          <option value="high"${areaConjQuality === 'high' ? ' selected' : ''}>high</option>
+        </select>
+      </label>
+      <button type="button" class="free-button" data-area-recompute${areaConjDirty ? '' : ' disabled'}>recompute f</button>
+      <button type="button" class="free-button" data-area-preset="equality">equality</button>
+      <button type="button" class="free-button" data-area-preset="midpoint">midpoints</button>
+      ${areaDeltaControlHtml()}
+    </div>
+    <div class="ab-union-readout">
+      <span>status</span><strong><span class="${staleClass}">${escapeHtml(staleText)}</span></strong>
+      <span>Σ f_i</span><strong>${totalF.toFixed(6)}</strong>
+      <span>Σ (1-f_i)</span><strong>${totalDeficit.toFixed(6)}</strong>
+      <span>rows with a_i+b_i &gt; 1</span><strong>${gtOneCount}</strong>
+      <span>T3-like rows</span><strong>${t3LikeCount}</strong>
+      <span>infeasible rows</span><strong>${infeasibleCount}</strong>
+      <span>active boundaries</span><strong>${escapeHtml(boundary.activeLabel)}</strong>
+      <span>quality</span><strong>${escapeHtml(areaConjQuality)}</strong>
+      <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
+      <span>f marks</span><strong>${escapeHtml(areaConjFMarkText(boundary))}</strong>
+    </div>
+    <div class="free-row"><span>${escapeHtml(areaConjState.status)}</span></div>
+    <div class="ab-union-section-title">region data</div>
+    <table class="ab-union-table">
+      <thead><tr><th>R_i</th><th>T3</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
+      <tbody>${regionRowsHtml}</tbody>
+    </table>
+    <div class="ab-union-section-title">edge dots</div>
+    <table class="ab-union-table">
+      <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+      <tbody>${edgeRowsHtml}</tbody>
+    </table>
+  `;
+}
+
+function countWord(count: number): string {
+  if (count === 4) return 'four';
+  if (count === 5) return 'five';
+  return count.toString();
+}
+
+function conj0525ConstraintSummary(): string {
+  const r3 = conj0525Options.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
+  const r5 = conj0525Options.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
+  return `0525 slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
+}
+
+function hasConj0525Options(options: Conj0521Options | Conj0525Options): options is Conj0525Options {
+  return 'forceSum3' in options && 'forceSum5' in options;
+}
+
+function renderConjPanel(
+  result: Conj0521RenderResult,
+  constraintsTitle: string,
+  boundaryState: AbUnionState | null = null,
+  options: Conj0521Options | Conj0525Options | null = null,
+  mode: '0521' | '0525' | null = null,
+): void {
+  const boundaryToolControls = boundaryState && mode
+    ? (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
+      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj-tool-mode="${mode}" data-conj-tool="${tool}">${areaConjToolText(tool)}</button>
+    `).join('')
+    : '';
+  const boundaryToolbar = boundaryState && mode ? `
+    <div class="ab-union-toolbar">
+      <span>tool</span>
+      ${boundaryToolControls}
+    </div>
+    <div class="free-row"><span>${escapeHtml(boundaryState.status)}</span></div>
+  ` : '';
+  const hardLimitControls = options && mode ? `
+    <div class="ab-union-toolbar">
+      <span>drag</span>
+      <label><input type="checkbox" data-conj-hard-limit="${mode}"${options.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
+    </div>
+  ` : '';
+  const forceControls = options && hasConj0525Options(options) ? `
+    <div class="ab-union-toolbar">
+      <span>force</span>
+      <label><input type="checkbox" data-conj0525-force-sum="3"${options.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
+      <label><input type="checkbox" data-conj0525-force-sum="5"${options.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
+    </div>
+  ` : '';
+  const optionControls = `${hardLimitControls}${forceControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -2438,24 +2981,42 @@ function renderConj0521Panel(result: Conj0521RenderResult): void {
       <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
     </tr>
   `).join('');
+  const edgeRowsHtml = boundaryState ? result.base.edgeRows.map((row) => `
+    <tr>
+      <td>e${row.index}</td>
+      <td>${row.split ? 'two' : 'one'}</td>
+      <td>${row.left.toFixed(4)}</td>
+      <td>${row.right.toFixed(4)}</td>
+    </tr>
+  `).join('') : '';
   const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
   const sideClass = result.triangle && result.triangle.side <= 1
     ? 'ab-union-ok'
     : result.triangle ? 'ab-union-bad' : '';
+  const pointCount = result.points.length;
 
   abUnionControls.innerHTML = `
+    ${boundaryToolbar}
+    ${optionControls}
     <div class="ab-union-readout">
-      <span>4-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
+      <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
       <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
       <span>status</span><strong>${escapeHtml(result.status)}</strong>
     </div>
-    <div class="ab-union-section-title">0521 constraints</div>
+    <div class="ab-union-section-title">${escapeHtml(constraintsTitle)}</div>
     <table class="ab-union-table">
       <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
       <tbody>${rowHtml}</tbody>
     </table>
-    <div class="ab-union-section-title">four points</div>
+    ${boundaryState ? `
+      <div class="ab-union-section-title">edge dots</div>
+      <table class="ab-union-table">
+        <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+        <tbody>${edgeRowsHtml}</tbody>
+      </table>
+    ` : ''}
+    <div class="ab-union-section-title">${countWord(pointCount)} points</div>
     <table class="ab-union-table">
       <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
       <tbody>${pointHtml}</tbody>
@@ -2477,7 +3038,10 @@ function isCoverOverlayAvailable(): boolean {
   return shapeMode !== 'free' &&
     shapeMode !== 'ab-union' &&
     shapeMode !== 'ab-hull-debug' &&
-    shapeMode !== 'conj-0521';
+    shapeMode !== 'max-area' &&
+    shapeMode !== 'area-conj' &&
+    shapeMode !== 'conj-0521' &&
+    shapeMode !== 'conj-0525';
 }
 
 function syncPointToolControls(): void {
@@ -2485,7 +3049,10 @@ function syncPointToolControls(): void {
   const visible = shapeMode !== 'free' &&
     shapeMode !== 'ab-union' &&
     shapeMode !== 'ab-hull-debug' &&
-    shapeMode !== 'conj-0521';
+    shapeMode !== 'max-area' &&
+    shapeMode !== 'area-conj' &&
+    shapeMode !== 'conj-0521' &&
+    shapeMode !== 'conj-0525';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -2504,8 +3071,14 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'ab union';
   } else if (shapeMode === 'ab-hull-debug') {
     shapeTitle.textContent = 'AB hull debug';
+  } else if (shapeMode === 'max-area') {
+    shapeTitle.textContent = 'Max Area';
+  } else if (shapeMode === 'area-conj') {
+    shapeTitle.textContent = 'Area Conj';
   } else if (shapeMode === 'conj-0521') {
     shapeTitle.textContent = '0521 conj';
+  } else if (shapeMode === 'conj-0525') {
+    shapeTitle.textContent = '0525 conj';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -2518,15 +3091,20 @@ function syncModeButtons(): void {
   const freeActive = shapeMode === 'free';
   const abUnionActive = shapeMode === 'ab-union';
   const abHullDebugActive = shapeMode === 'ab-hull-debug';
-  const conj0521Active = shapeMode === 'conj-0521';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || conj0521Active || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || conj0521Active;
+  const maxAreaActive = shapeMode === 'max-area';
+  const areaConjActive = shapeMode === 'area-conj';
+  const conjActive = shapeMode === 'conj-0521' || shapeMode === 'conj-0525';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !conj0521Active;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !conjActive;
   abUnionPanelTitle.textContent = abHullDebugActive
     ? 'AB hull debug'
-    : conj0521Active ? '0521 conj' : 'ab union region';
+    : shapeMode === 'max-area' ? 'Max Area'
+      : shapeMode === 'area-conj' ? 'Area Conj'
+        : shapeMode === 'conj-0521' ? '0521 conj'
+          : shapeMode === 'conj-0525' ? '0525 conj' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -2645,8 +3223,8 @@ function render(): void {
     const result = renderAbHullDebug(ctx, abHullDebugState);
     currentAbHullDebugResult = result;
 
-    gammaValues.textContent = `hull debug: a=${abHullDebugState.a.toFixed(3)}, b=${abHullDebugState.b.toFixed(3)}, a+b=${(abHullDebugState.a + abHullDebugState.b).toFixed(3)}`;
-    localCBounds.textContent = 'local view: u along V_i to V_{i+1}, v along V_i to V_{i-1}';
+    gammaValues.textContent = `hull debug: a=${formatAbHullDebugParameter(abHullDebugState.a)}, b=${formatAbHullDebugParameter(abHullDebugState.b)}, a+b=${formatAbHullDebugParameter(abHullDebugState.a + abHullDebugState.b)}`;
+    localCBounds.textContent = 'local view: full hex footprint in u,v coordinates';
     localCValues.textContent = result.closed
       ? result.missedCount === 0
         ? 'drawn polygon contains sampled exact set'
@@ -2660,6 +3238,48 @@ function render(): void {
     coverOverlayStatus.style.color = '#64748b';
     regionRenderer.render();
     renderAbHullDebugPanel(result);
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'max-area') {
+    renderMaxAreaCanvasAndReadouts();
+    regionRenderer.render();
+    renderMaxAreaPanel();
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'area-conj') {
+    ensureAreaConjResults();
+    if (areaConjState.tool === 'd-mark' || areaConjState.tool === 's-mark') {
+      setAbUnionTool(areaConjState, 'move');
+    }
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    if (!areaConjDirty) {
+      for (const result of areaConjResults) {
+        drawAreaConjResult(ctx, result, AREA_COLORS[result.index] ?? '#0f172a');
+      }
+    }
+    const boundary = renderAbUnionBoundaryControls(ctx, areaConjState, { showFMarkTriangle: false });
+
+    const totalF = areaConjResults.reduce((sum, result) => sum + result.f, 0);
+    const totalDeficit = areaConjResults.reduce((sum, result) => sum + result.deficit, 0);
+    gammaValues.textContent = `${formatAbUnionValues('a', abUnionAValues(areaConjState))}; ${formatAbUnionValues('b', abUnionBValues(areaConjState))}`;
+    localCBounds.textContent = `Σf=${totalF.toFixed(6)}, Σ(1-f)=${totalDeficit.toFixed(6)}, quality=${areaConjQuality}`;
+    localCValues.textContent = areaConjDirty
+      ? 'stale: f rows update after commit'
+      : `rows with a_i+b_i>1: ${boundary.regionRows.filter((row) => row.sum > 1 + 1e-9).length}`;
+    ceStatus.textContent = 'Area Conj: CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = areaConjDirty ? 'area values stale during edit' : 'area values current';
+    ceChainStatus.style.color = areaConjDirty ? '#c2410c' : '#047857';
+    coverOverlayStatus.textContent = 'Area Conj overlays: maximizing f_i triangles';
+    coverOverlayStatus.style.color = '#475569';
+    regionRenderer.render();
+    renderAreaConjPanel(boundary);
     syncControllerSnapshot();
     return;
   }
@@ -2683,7 +3303,31 @@ function render(): void {
     coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConj0521Panel(result);
+    renderConjPanel(result, '0521 constraints', conj0521State, conj0521Options, '0521');
+    syncControllerSnapshot();
+    return;
+  }
+
+  if (shapeMode === 'conj-0525') {
+    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs, conj0525Options);
+
+    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
+    localCBounds.textContent = conj0525ConstraintSummary();
+    localCValues.textContent = result.triangle
+      ? `5-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `5-point side unavailable: ${result.status}`;
+    ceStatus.textContent = '0525 conj: CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
+    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
+    coverOverlayStatus.style.color = '#475569';
+    regionRenderer.render();
+    renderConjPanel(result, '0525 constraints', conj0525State, conj0525Options, '0525');
     syncControllerSnapshot();
     return;
   }
@@ -3233,6 +3877,47 @@ abUnionControls.addEventListener('click', async (event) => {
     }
     return;
   }
+  const areaTool = target.dataset.areaTool;
+  if (areaTool === 'move' || areaTool === 'add' || areaTool === 'delete' || areaTool === 'f-mark') {
+    setAbUnionTool(areaConjState, areaTool);
+    render();
+    return;
+  }
+  const conjTool = target.dataset.conjTool;
+  const conjToolMode = target.dataset.conjToolMode;
+  if (conjTool === 'move' || conjTool === 'add' || conjTool === 'delete') {
+    setAbUnionTool(conjToolMode === '0521' ? conj0521State : conj0525State, conjTool);
+    render();
+    return;
+  }
+  if (target.dataset.areaFmarkDelete !== undefined) {
+    deleteSelectedAbUnionFMark(areaConjState);
+    render();
+    return;
+  }
+  if (target.dataset.areaFmarkClear !== undefined) {
+    clearAbUnionFMarks(areaConjState);
+    render();
+    return;
+  }
+  if (target.dataset.areaRecompute !== undefined) {
+    recomputeAreaConjResults();
+    render();
+    return;
+  }
+  const areaPreset = target.dataset.areaPreset as AbUnionPreset | undefined;
+  if (areaPreset) {
+    setAbUnionPreset(areaConjState, areaPreset);
+    markAreaConjDirty();
+    recomputeAreaConjResults();
+    render();
+    return;
+  }
+  if (target.dataset.maxAreaRecompute !== undefined) {
+    recomputeMaxArea();
+    render();
+    return;
+  }
   const tool = target.dataset.abTool;
   if (tool === 'move' || tool === 'add' || tool === 'delete' || tool === 'd-mark' || tool === 's-mark' || tool === 'f-mark') {
     setAbUnionTool(abUnionState, tool);
@@ -3272,8 +3957,10 @@ abUnionControls.addEventListener('click', async (event) => {
     return;
   }
   if (target.dataset.abOptimize !== undefined) {
+    if (abUnionState.autoOptimizeTheta) return;
     abUnionState.lastOptimized = optimizeAbUnionTheta(abUnionState);
     abUnionState.theta = abUnionState.lastOptimized.theta;
+    abUnionState.thetaOptimizationPending = false;
     render();
     return;
   }
@@ -3283,20 +3970,171 @@ abUnionControls.addEventListener('input', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   const debugParam = target.dataset.hullDebugParam;
-  if (debugParam === 'a' || debugParam === 'b') {
+  if (isAbHullDebugParam(debugParam)) {
+    if (target.type === 'number') return;
     setAbHullDebugParameter(abHullDebugState, debugParam, Number(target.value));
-    render();
+    syncAbHullDebugParameterControls();
+    return;
+  }
+  if (target.dataset.maxAreaParam !== undefined) {
+    if (target.type === 'number') return;
+    applyMaxAreaParameterInput(target, false);
+    syncMaxAreaParameterControls();
+    renderMaxAreaCanvasAndReadouts();
     return;
   }
   if (target.dataset.abTheta !== undefined) {
+    if (abUnionState.autoOptimizeTheta) return;
     abUnionState.theta = Math.max(0, Math.min(120, Number(target.value))) * Math.PI / 180;
     abUnionState.lastOptimized = null;
     render();
   }
 });
 
+abUnionControls.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (applyAreaDeltaInput(target)) {
+    render();
+    event.preventDefault();
+    return;
+  }
+  if (applyMaxAreaParameterInput(target, true)) {
+    render();
+    event.preventDefault();
+    return;
+  }
+  if (!applyAbHullDebugParameterInput(target)) return;
+  render();
+  event.preventDefault();
+});
+
+abUnionControls.addEventListener('wheel', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (shapeMode === 'max-area') {
+    const param = target.dataset.maxAreaParam;
+    if (!isMaxAreaParam(param) || event.deltaY === 0) return;
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setMaxAreaParameter(param, maxAreaState[param] + direction * AREA_WHEEL_STEP, true);
+    render();
+    event.preventDefault();
+    return;
+  }
+  if (shapeMode !== 'ab-hull-debug') return;
+  const debugParam = target.dataset.hullDebugParam;
+  if (!isAbHullDebugParam(debugParam) || event.deltaY === 0) return;
+  const direction = event.deltaY < 0 ? 1 : -1;
+  setAbHullDebugParameter(
+    abHullDebugState,
+    debugParam,
+    abHullDebugState[debugParam] + direction * AB_HULL_DEBUG_WHEEL_STEP,
+  );
+  render();
+  event.preventDefault();
+});
+
 abUnionControls.addEventListener('change', (event) => {
   const target = event.target;
+  if (target instanceof HTMLInputElement && applyAreaDeltaInput(target)) {
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && applyMaxAreaParameterInput(target, true)) {
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.maxAreaSumMode !== undefined) {
+    const mode = target.checked ? target.dataset.maxAreaSumMode : 'none';
+    if (isAreaSumConstraintMode(mode)) {
+      setMaxAreaSumConstraint(mode);
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.maxAreaT3Like !== undefined) {
+    maxAreaState.t3Like = target.checked;
+    recomputeMaxArea();
+    render();
+    return;
+  }
+  if (target instanceof HTMLSelectElement && target.dataset.maxAreaQuality !== undefined) {
+    if (isAreaQuality(target.value)) {
+      maxAreaState.quality = target.value;
+      recomputeMaxArea();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.conjHardLimit !== undefined) {
+    if (target.dataset.conjHardLimit === '0521') {
+      conj0521Options.hardLimitDrag = target.checked;
+    } else if (target.dataset.conjHardLimit === '0525') {
+      conj0525Options.hardLimitDrag = target.checked;
+    }
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.conj0525ForceSum !== undefined) {
+    if (target.dataset.conj0525ForceSum === '3') {
+      conj0525Options.forceSum3 = target.checked;
+      render();
+    } else if (target.dataset.conj0525ForceSum === '5') {
+      conj0525Options.forceSum5 = target.checked;
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLSelectElement && target.dataset.areaQuality !== undefined) {
+    if (isAreaQuality(target.value)) {
+      areaConjQuality = target.value;
+      markAreaConjDirty();
+      recomputeAreaConjResults();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.areaT3Index !== undefined) {
+    const index = Number(target.dataset.areaT3Index);
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      areaConjT3Like[index] = target.checked;
+      markAreaConjDirty();
+      recomputeAreaConjResults();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.areaSumMode !== undefined) {
+    const index = Number(target.dataset.areaSumIndex);
+    const mode = target.checked ? target.dataset.areaSumMode : 'none';
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      if (isAreaSumConstraintMode(mode)) {
+        setAbUnionSumConstraint(areaConjState, index, mode, areaConstraintDelta);
+      }
+      markAreaConjDirty();
+      recomputeAreaConjResults();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.areaLockKind !== undefined) {
+    const index = Number(target.dataset.areaLockIndex);
+    const kind = target.dataset.areaLockKind;
+    if (Number.isInteger(index) && index >= 0 && index < 6) {
+      if (kind === 'a' || kind === 'b') {
+        setAbUnionLock(areaConjState, kind, index, target.checked);
+      }
+      markAreaConjDirty();
+      recomputeAreaConjResults();
+      render();
+    }
+    return;
+  }
+  if (target instanceof HTMLInputElement && applyAbHullDebugParameterInput(target)) {
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.abShowOriginal !== undefined) {
     abUnionState.showOriginalRegion = target.checked;
     render();
@@ -3307,6 +4145,14 @@ abUnionControls.addEventListener('change', (event) => {
     render();
     return;
   }
+  if (target instanceof HTMLInputElement && target.dataset.abAutoTheta !== undefined) {
+    abUnionState.autoOptimizeTheta = target.checked;
+    if (target.checked) {
+      requestAbUnionThetaOptimization(abUnionState);
+    }
+    render();
+    return;
+  }
   if (target instanceof HTMLInputElement && target.dataset.abShowFarPair !== undefined) {
     abUnionState.showFarPair = target.checked;
     render();
@@ -3314,13 +4160,13 @@ abUnionControls.addEventListener('change', (event) => {
   }
   if (target instanceof HTMLInputElement && target.dataset.abClipSectors !== undefined) {
     abUnionState.clipToCornerSectors = target.checked;
-    abUnionState.lastOptimized = null;
+    requestAbUnionThetaOptimization(abUnionState);
     render();
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.abAxisHull !== undefined) {
     abUnionState.useAxisAlignedHull = target.checked;
-    abUnionState.lastOptimized = null;
+    requestAbUnionThetaOptimization(abUnionState);
     render();
     return;
   }
@@ -3346,10 +4192,13 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.abFixedSum !== undefined) {
-    const index = Number(target.dataset.abFixedSum);
+  if (target instanceof HTMLInputElement && target.dataset.abSumMode !== undefined) {
+    const index = Number(target.dataset.abSumIndex);
+    const mode = target.checked ? target.dataset.abSumMode : 'none';
     if (Number.isInteger(index) && index >= 0 && index < 6) {
-      setAbUnionFixedSum(abUnionState, index, target.checked);
+      if (isAreaSumConstraintMode(mode)) {
+        setAbUnionSumConstraint(abUnionState, index, mode, areaConstraintDelta);
+      }
       render();
     }
     return;
@@ -3377,7 +4226,7 @@ abUnionControls.addEventListener('change', (event) => {
     const value = target.value;
     if (value === 'coarse' || value === 'high' || value === 'adaptive') {
       abUnionState.quality = value as AbUnionQuality;
-      abUnionState.lastOptimized = null;
+      requestAbUnionThetaOptimization(abUnionState);
       render();
     }
   }
@@ -3458,6 +4307,22 @@ setupAbHullDebugInteraction(
 
 setupAbUnionInteraction(
   canvas,
+  () => shapeMode === 'area-conj',
+  () => areaConjState,
+  triangleState,
+  () => manualLocalCs,
+  (index, value) => {
+    manualLocalCs[index] = clampToLocalCMax(value, 1);
+  },
+  render,
+  {
+    onPreviewChange: markAreaConjDirty,
+    onCommitChange: recomputeAreaConjResults,
+  },
+);
+
+setupAbUnionInteraction(
+  canvas,
   () => shapeMode === 'conj-0521',
   () => conj0521State,
   triangleState,
@@ -3466,6 +4331,24 @@ setupAbUnionInteraction(
     manualLocalCs[index] = clampToLocalCMax(value, 1);
   },
   render,
+  {
+    moveDotValue: (state, dot, value) => moveConj0521Dot(state, dot, value, conj0521Options),
+  },
+);
+
+setupAbUnionInteraction(
+  canvas,
+  () => shapeMode === 'conj-0525',
+  () => conj0525State,
+  triangleState,
+  () => manualLocalCs,
+  (index, value) => {
+    manualLocalCs[index] = clampToLocalCMax(value, 1);
+  },
+  render,
+  {
+    moveDotValue: (state, dot, value) => moveConj0525Dot(state, dot, value, conj0525Options),
+  },
 );
 
 freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => {
