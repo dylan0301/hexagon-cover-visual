@@ -2235,7 +2235,7 @@ function renderFreePanel(validation: FreeValidationResult): void {
     <div class="free-toolbar">tool ${toolButtons}</div>
     ${pointControls}
     ${renderSamplingPanel()}
-    <div class="free-row"><span>${freeState.status}</span></div>
+    <div class="free-row"><span class="status-reserve">${freeState.status}</span></div>
     ${triangleRows}
     <div class="free-row"><strong>labels</strong></div>
     ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting segments.</div>'}
@@ -2415,7 +2415,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
-    <div class="free-row"><span>${escapeHtml(abUnionState.status)}</span></div>
+    <div class="free-row"><span class="status-reserve">${escapeHtml(abUnionState.status)}</span></div>
     <div class="free-row"><strong>labels</strong></div>
     ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting sources.</div>'}
     <div class="ab-union-section-title">edge dots</div>
@@ -2511,7 +2511,7 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
       <span>coverage</span><strong class="${coverageClass}">${escapeHtml(coverageText)}</strong>
       <span>vertices</span><strong>${abHullDebugState.vertices.length}${abHullDebugState.closed ? ' closed' : ''}</strong>
       <span>edge directions</span><strong>u, v, u-v</strong>
-      <span>status</span><strong>${escapeHtml(abHullDebugState.status)}</strong>
+      <span>status</span><strong class="status-reserve">${escapeHtml(abHullDebugState.status)}</strong>
     </div>
     <div class="ab-union-section-title">current polygon</div>
     <textarea id="ab-hull-debug-vertices" readonly spellcheck="false">${escapeHtml(result.vertexText)}</textarea>
@@ -2788,7 +2788,7 @@ function renderMaxAreaPanel(): void {
       ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-readout">
-      <span>status</span><strong><span class="${statusClass}">${escapeHtml(status)}</span></strong>
+      <span>status</span><strong><span class="${statusClass} status-reserve">${escapeHtml(status)}</span></strong>
       <span>a</span><strong>${formatAreaNumber(maxAreaState.a)}</strong>
       <span>b</span><strong>${formatAreaNumber(maxAreaState.b)}</strong>
       <span>a+b</span><strong>${formatAreaNumber(maxAreaState.a + maxAreaState.b)}</strong>
@@ -2889,7 +2889,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-readout">
-      <span>status</span><strong><span class="${staleClass}">${escapeHtml(staleText)}</span></strong>
+      <span>status</span><strong><span class="${staleClass} status-reserve">${escapeHtml(staleText)}</span></strong>
       <span>Σ f_i</span><strong>${totalF.toFixed(6)}</strong>
       <span>Σ (1-f_i)</span><strong>${totalDeficit.toFixed(6)}</strong>
       <span>rows with a_i+b_i &gt; 1</span><strong>${gtOneCount}</strong>
@@ -2900,7 +2900,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
       <span>f marks</span><strong>${escapeHtml(areaConjFMarkText(boundary))}</strong>
     </div>
-    <div class="free-row"><span>${escapeHtml(areaConjState.status)}</span></div>
+    <div class="free-row"><span class="status-reserve">${escapeHtml(areaConjState.status)}</span></div>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
       <thead><tr><th>R_i</th><th>T3</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
@@ -2947,7 +2947,7 @@ function renderConjPanel(
       <span>tool</span>
       ${boundaryToolControls}
     </div>
-    <div class="free-row"><span>${escapeHtml(boundaryState.status)}</span></div>
+    <div class="free-row"><span class="status-reserve">${escapeHtml(boundaryState.status)}</span></div>
   ` : '';
   const hardLimitControls = options && mode ? `
     <div class="ab-union-toolbar">
@@ -3002,7 +3002,7 @@ function renderConjPanel(
       <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
       <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
-      <span>status</span><strong>${escapeHtml(result.status)}</strong>
+      <span>status</span><strong class="status-reserve">${escapeHtml(result.status)}</strong>
     </div>
     <div class="ab-union-section-title">${escapeHtml(constraintsTitle)}</div>
     <table class="ab-union-table">

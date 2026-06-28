@@ -1,0 +1,6 @@
+there are some red letters in the webpage, that constantly change.
+for example: in the triangle page, the cover: gaps on edge3 ...
+because of that, the blocks in the webpage are changing the layout, disturbing for the interface.
+make enough space under those changing letters so that the layout of blocks don't change.
+change all places having that property.
+ask me questions 
