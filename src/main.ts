@@ -1,6 +1,6 @@
 import './style.css';
 import type { Point, ShapeMode, TriangleState } from './types';
-import { config, mathToCanvas, scaleToCanvas, setCanvasSize } from './coords';
+import { canvasToMath, config, mathToCanvas, scaleToCanvas, scaleToMath, setCanvasSize } from './coords';
 import { drawHexagon, HEXAGON_VERTICES } from './hexagon';
 import {
   computeChainValuesForLocalCs,
@@ -217,6 +217,8 @@ const triangleState: TriangleState = {
   controlPoint: { x: 0, y: 0 },
 };
 const DEFAULT_STRICT_EPS_UPPER_BOUND = 0.0001;
+type CoreCaseTool = 'move' | 'add' | 'delete' | 'core-point';
+
 let startValue = 0.25;
 let graphMode: GraphMode = 'composition';
 let shapeMode: ShapeMode = 'triangle';
@@ -250,7 +252,9 @@ let coreCaseOptions: CoreCaseOptions = {
   hardLimitDrag: false,
   algorithm2Diagonals: false,
 };
+let coreCaseTool: CoreCaseTool = 'move';
 let coreCaseDisabledPointIds: string[] = [];
+let coreCaseIntervalPointFractions: number[] = Array(6).fill(0.5);
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
 
@@ -299,6 +303,7 @@ interface ControllerSnapshot {
   pointSeeds: SymmetricPointSeed[];
   selectedPointSeedId: string | null;
   coreCaseDisabledPointIds: string[];
+  coreCaseIntervalPointFractions: number[];
   coreCaseAlgorithm2Diagonals: boolean;
 }
 
@@ -307,6 +312,7 @@ type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'poin
   pointSeeds?: unknown;
   coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
+  coreCaseIntervalPointFractions?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
 };
 
@@ -436,6 +442,17 @@ function pruneCoreCaseDisabledPointIds(currentPointIds: readonly string[]): void
   coreCaseDisabledPointIds = coreCaseDisabledPointIds.filter((id) => currentIds.has(id));
 }
 
+function sanitizeCoreCaseIntervalPointFractions(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return Array(6).fill(0.5);
+  }
+
+  return Array.from({ length: 6 }, (_, index) => {
+    const candidate = value[index];
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? clamp01(candidate) : 0.5;
+  });
+}
+
 function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
   if (!isCoreCasePointId(pointId)) {
     return;
@@ -448,6 +465,152 @@ function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
     ids.add(pointId);
   }
   coreCaseDisabledPointIds = sanitizeCoreCasePointIds(Array.from(ids));
+}
+
+function coreCasePointerMath(event: PointerEvent): Point {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? config.canvasSize / rect.width : 1;
+  const scaleY = rect.height > 0 ? config.canvasSize / rect.height : 1;
+  return canvasToMath({
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
+  });
+}
+
+function coreCaseHitScale(pointerType: string): number {
+  if (pointerType === 'touch') return 1.75;
+  if (pointerType === 'pen') return 1.35;
+  return 1;
+}
+
+function pointDistance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointDot(a: Point, b: Point): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+function coreCaseEdgeVector(index: number): Point {
+  const start = HEXAGON_VERTICES[index];
+  const end = HEXAGON_VERTICES[(index + 1) % 6];
+  return { x: end.x - start.x, y: end.y - start.y };
+}
+
+function coreCasePointOnEdge(index: number, value: number): Point {
+  const start = HEXAGON_VERTICES[index];
+  const edge = coreCaseEdgeVector(index);
+  const t = clamp01(value);
+  return { x: start.x + t * edge.x, y: start.y + t * edge.y };
+}
+
+function coreCaseProjectEdgeValue(point: Point, index: number): number {
+  const start = HEXAGON_VERTICES[index];
+  const edge = coreCaseEdgeVector(index);
+  const relative = { x: point.x - start.x, y: point.y - start.y };
+  return clamp01(pointDot(relative, edge) / pointDot(edge, edge));
+}
+
+function coreCaseIntervalPoint(index: number): Point | null {
+  const edge = coreCaseState.edgeDots[index];
+  if (!edge?.split) return null;
+  const fraction = clamp01(coreCaseIntervalPointFractions[index] ?? 0.5);
+  return coreCasePointOnEdge(index, edge.left + fraction * (edge.right - edge.left));
+}
+
+function hitCoreCaseIntervalPoint(point: Point, pointerType: string): number | null {
+  const maxDistance = scaleToMath(12 * coreCaseHitScale(pointerType));
+  let bestIndex: number | null = null;
+  let bestDistance = Infinity;
+
+  for (let index = 0; index < 6; index++) {
+    const candidate = coreCaseIntervalPoint(index);
+    if (!candidate) continue;
+    const candidateDistance = pointDistance(point, candidate);
+    if (candidateDistance <= maxDistance && candidateDistance < bestDistance) {
+      bestIndex = index;
+      bestDistance = candidateDistance;
+    }
+  }
+
+  return bestIndex;
+}
+
+function setCoreCaseIntervalPointFromPoint(index: number, point: Point): void {
+  const edge = coreCaseState.edgeDots[index];
+  if (!edge?.split) return;
+  const value = coreCaseProjectEdgeValue(point, index);
+  const width = edge.right - edge.left;
+  coreCaseIntervalPointFractions[index] = width > 1e-12
+    ? clamp01((value - edge.left) / width)
+    : 0.5;
+}
+
+function setupCoreCaseIntervalPointInteraction(): void {
+  let active: { pointerId: number; index: number } | null = null;
+
+  function enabled(): boolean {
+    return shapeMode === 'core-case' && coreCaseTool === 'core-point';
+  }
+
+  function stop(): void {
+    if (active && canvas.hasPointerCapture(active.pointerId)) {
+      canvas.releasePointerCapture(active.pointerId);
+    }
+    active = null;
+  }
+
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!enabled() || !event.isPrimary) return;
+    const pointerType = event.pointerType || 'mouse';
+    const point = coreCasePointerMath(event);
+    const index = hitCoreCaseIntervalPoint(point, pointerType);
+    if (index === null) {
+      canvas.style.cursor = 'default';
+      return;
+    }
+
+    active = { pointerId: event.pointerId, index };
+    canvas.setPointerCapture(event.pointerId);
+    setCoreCaseIntervalPointFromPoint(index, point);
+    coreCaseState.status = `Dragging I${index}.`;
+    render();
+    event.preventDefault();
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+    if (active) {
+      if (active.pointerId !== event.pointerId) return;
+      if (!enabled()) {
+        stop();
+        return;
+      }
+      setCoreCaseIntervalPointFromPoint(active.index, coreCasePointerMath(event));
+      render();
+      event.preventDefault();
+      return;
+    }
+
+    if (!enabled()) return;
+    const pointerType = event.pointerType || 'mouse';
+    const point = coreCasePointerMath(event);
+    canvas.style.cursor = hitCoreCaseIntervalPoint(point, pointerType) === null ? 'default' : 'grab';
+  });
+
+  canvas.addEventListener('pointerup', (event) => {
+    if (!active || active.pointerId !== event.pointerId) return;
+    const index = active.index;
+    stop();
+    coreCaseState.status = `Updated I${index}.`;
+    render();
+    event.preventDefault();
+  });
+
+  canvas.addEventListener('pointercancel', (event) => {
+    if (!active || active.pointerId !== event.pointerId) return;
+    stop();
+    canvas.style.cursor = 'default';
+  });
 }
 
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
@@ -830,6 +993,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
     selectedPointSeedId: freeState.selectedPointSeedId,
     coreCaseDisabledPointIds: coreCaseDisabledPointIds.slice(),
+    coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
   };
 }
@@ -946,6 +1110,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreCaseDisabledPointIds = 'coreCaseDisabledPointIds' in parsed
     ? sanitizeCoreCasePointIds(parsed.coreCaseDisabledPointIds)
     : coreCaseDisabledPointIdsFromLegacyEnabled(parsed.coreCaseEnabledPointIds);
+  const parsedCoreCaseIntervalPointFractions = sanitizeCoreCaseIntervalPointFractions(
+    parsed.coreCaseIntervalPointFractions,
+  );
 
   return {
     version: 5,
@@ -971,6 +1138,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     pointSeeds,
     selectedPointSeedId,
     coreCaseDisabledPointIds: parsedCoreCaseDisabledPointIds,
+    coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
   };
 }
@@ -1002,7 +1170,10 @@ function loadControllerSnapshot(raw: string): void {
   freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
   freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
   coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
+  coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
+  coreCaseTool = 'move';
+  setAbUnionTool(coreCaseState, 'move');
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -2875,6 +3046,10 @@ function areaConjToolText(tool: AbUnionTool): string {
   return tool[0].toUpperCase() + tool.slice(1);
 }
 
+function coreCaseToolText(tool: CoreCaseTool): string {
+  return tool === 'core-point' ? 'Core point' : areaConjToolText(tool);
+}
+
 function areaConjFMarkText(result: AbUnionBoundaryRenderResult | null): string {
   if (!result || result.fMarkCount === 0) return 'none';
   if (result.fMarkDistance !== null) return `distance=${result.fMarkDistance.toFixed(5)}`;
@@ -2991,8 +3166,8 @@ function coreCaseConstraintSummary(): string {
 }
 
 function renderCoreCasePanel(result: CoreCaseRenderResult): void {
-  const boundaryToolControls = (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
-      <button type="button" class="free-button${coreCaseState.tool === tool ? ' is-active' : ''}" data-core-case-tool="${tool}">${areaConjToolText(tool)}</button>
+  const boundaryToolControls = (['move', 'add', 'delete', 'core-point'] as CoreCaseTool[]).map((tool) => `
+      <button type="button" class="free-button${coreCaseTool === tool ? ' is-active' : ''}" data-core-case-tool="${tool}">${coreCaseToolText(tool)}</button>
     `).join('');
   const boundaryToolbar = `
     <div class="ab-union-toolbar">
@@ -3353,7 +3528,10 @@ function render(): void {
       triangleState,
       manualLocalCs,
       coreCaseOptions,
-      { disabledPointIds: coreCaseDisabledPointIds },
+      {
+        disabledPointIds: coreCaseDisabledPointIds,
+        intervalPointFractions: coreCaseIntervalPointFractions,
+      },
     );
     pruneCoreCaseDisabledPointIds(result.points.map((point) => point.id));
 
@@ -3925,9 +4103,19 @@ abUnionControls.addEventListener('click', async (event) => {
     render();
     return;
   }
-  const coreCaseTool = target.dataset.coreCaseTool;
-  if (coreCaseTool === 'move' || coreCaseTool === 'add' || coreCaseTool === 'delete') {
-    setAbUnionTool(coreCaseState, coreCaseTool);
+  const requestedCoreCaseTool = target.dataset.coreCaseTool;
+  if (
+    requestedCoreCaseTool === 'move' ||
+    requestedCoreCaseTool === 'add' ||
+    requestedCoreCaseTool === 'delete' ||
+    requestedCoreCaseTool === 'core-point'
+  ) {
+    if (requestedCoreCaseTool === 'core-point') {
+      coreCaseState.status = 'Core point mode: drag interval candidates.';
+    } else {
+      setAbUnionTool(coreCaseState, requestedCoreCaseTool);
+    }
+    coreCaseTool = requestedCoreCaseTool;
     render();
     return;
   }
@@ -4370,7 +4558,7 @@ setupAbUnionInteraction(
 
 setupAbUnionInteraction(
   canvas,
-  () => shapeMode === 'core-case',
+  () => shapeMode === 'core-case' && coreCaseTool !== 'core-point',
   () => coreCaseState,
   triangleState,
   () => manualLocalCs,
@@ -4382,6 +4570,7 @@ setupAbUnionInteraction(
     moveDotValue: (state, dot, value) => moveCoreCaseDot(state, dot, value, coreCaseOptions),
   },
 );
+setupCoreCaseIntervalPointInteraction();
 
 freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => {
   if (freeState.tool !== 'sample') {

@@ -37,6 +37,8 @@ interface CoreCasePointContext {
   aValues: number[];
   bValues: number[];
   algorithm2Diagonals: boolean;
+  algorithm2P: number;
+  algorithm2Q: number;
 }
 
 interface CoreCasePointDefinition {
@@ -70,6 +72,7 @@ export interface CoreCaseRegionRow {
 
 export interface CoreCaseRenderOptions {
   disabledPointIds?: ReadonlySet<string> | readonly string[];
+  intervalPointFractions?: readonly number[];
 }
 
 export interface CoreCaseRenderResult {
@@ -521,9 +524,16 @@ function algorithm2CStar(p: number, q: number): number {
   return clamp01((low + high) / 2);
 }
 
-function algorithm2DiagonalPoint(index: number, aValues: number[], bValues: number[]): Point {
-  const p = 1 - bValues[4];
-  const q = 1 - aValues[4];
+function algorithm2Parameters(state: AbUnionState, aValues: number[], bValues: number[]): { p: number; q: number } {
+  const e3 = state.edgeDots[3];
+  const e4 = state.edgeDots[4];
+  return {
+    p: clamp01(1 - (e4?.split ? e4.right : bValues[4])),
+    q: clamp01(e3?.split ? e3.left : 1 - aValues[4]),
+  };
+}
+
+function algorithm2DiagonalPoint(index: number, p: number, q: number): Point {
   const radius = 1 - algorithm2CStar(p, q);
   return scale(radius, HEXAGON_VERTICES[index]);
 }
@@ -667,22 +677,22 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
   {
     id: 'D0',
     label: 'red on O-V0',
-    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
-      ? algorithm2DiagonalPoint(0, aValues, bValues)
+    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(0, algorithm2P, algorithm2Q)
       : diagonalRedWitness(0, aValues, bValues),
   },
   {
     id: 'D1',
     label: 'red on O-V1',
-    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
-      ? algorithm2DiagonalPoint(1, aValues, bValues)
+    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(1, algorithm2P, algorithm2Q)
       : diagonalRedWitness(1, aValues, bValues),
   },
   {
     id: 'D2',
     label: 'red on O-V2',
-    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
-      ? algorithm2DiagonalPoint(2, aValues, bValues)
+    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(2, algorithm2P, algorithm2Q)
       : diagonalRedWitness(2, aValues, bValues),
   },
 ];
@@ -690,7 +700,7 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
 export const CORE_CASE_POINT_IDS = CORE_CASE_POINT_DEFINITIONS.map((definition) => definition.id);
 
 export function isCoreCasePointId(value: string): boolean {
-  return CORE_CASE_POINT_IDS.includes(value) || /^E[0-5][LR]$/.test(value);
+  return CORE_CASE_POINT_IDS.includes(value) || /^I[0-5]$/.test(value);
 }
 
 function disabledPointSet(disabledPointIds: CoreCaseRenderOptions['disabledPointIds']): ReadonlySet<string> | null {
@@ -714,29 +724,27 @@ function buildCoreCasePoints(
   }));
 }
 
-function buildCoreCaseEdgeDotPoints(
+function intervalPointFraction(fractions: readonly number[] | undefined, index: number): number {
+  const value = fractions?.[index];
+  return typeof value === 'number' && Number.isFinite(value) ? clamp01(value) : 0.5;
+}
+
+function buildCoreCaseIntervalPoints(
   state: AbUnionState,
+  fractions: readonly number[] | undefined,
   disabledIds: ReadonlySet<string> | null,
 ): CoreCasePoint[] {
   return state.edgeDots.flatMap((edge, index) => {
     if (!edge.split) return [];
 
-    const leftId = `E${index}L`;
-    const rightId = `E${index}R`;
-    return [
-      {
-        id: leftId,
-        label: `e${index} left dot`,
-        point: pointOnEdge(index, edge.left),
-        enabled: disabledIds === null || !disabledIds.has(leftId),
-      },
-      {
-        id: rightId,
-        label: `e${index} right dot`,
-        point: pointOnEdge(index, edge.right),
-        enabled: disabledIds === null || !disabledIds.has(rightId),
-      },
-    ];
+    const id = `I${index}`;
+    const fraction = intervalPointFraction(fractions, index);
+    return [{
+      id,
+      label: `e${index} interval point`,
+      point: pointOnEdge(index, edge.left + fraction * (edge.right - edge.left)),
+      enabled: disabledIds === null || !disabledIds.has(id),
+    }];
   });
 }
 
@@ -757,12 +765,20 @@ export function renderCoreCase(
   const tValues = readTValues(state);
   const circles = circleGeometries(tValues);
   const disabledIds = disabledPointSet(renderOptions.disabledPointIds);
+  const algorithm2 = algorithm2Parameters(state, aValues, bValues);
   const points = [
     ...buildCoreCasePoints(
-      { circles, aValues, bValues, algorithm2Diagonals: options.algorithm2Diagonals },
+      {
+        circles,
+        aValues,
+        bValues,
+        algorithm2Diagonals: options.algorithm2Diagonals,
+        algorithm2P: algorithm2.p,
+        algorithm2Q: algorithm2.q,
+      },
       disabledIds,
     ),
-    ...buildCoreCaseEdgeDotPoints(state, disabledIds),
+    ...buildCoreCaseIntervalPoints(state, renderOptions.intervalPointFractions, disabledIds),
   ];
   const enabledPoints = points.filter((item) => item.enabled);
   const concretePoints = enabledPoints.flatMap((item) => item.point ? [item.point] : []);

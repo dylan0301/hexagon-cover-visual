@@ -45,3 +45,8 @@ if we have 2 draggable edge points on one edge,
 those two points become the candidate for inside the triangle additionally to the current 6 points.
 they have same property as other points.
 ask me questions
+
+2 changes needed.
+for the case where there is 2 draggable edge points on the V3V4 or V4V5, the algorithm2 should work differnetly.
+we should calculate p and q by the farthest points on those edges from V4.
+second change: for the core points, don't add 2 edge points, instead, make a draggable new core point inside the interval of the 2 edge points.
