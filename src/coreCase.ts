@@ -2,7 +2,6 @@ import type { Point, TriangleState } from './types';
 import { mathToCanvas, scaleToCanvas } from './coords';
 import { fitTriangle, type CoverTriangle } from './cover';
 import { HEXAGON_VERTICES } from './hexagon';
-import { admissible } from './maps';
 import {
   abUnionAValues,
   abUnionBValues,
@@ -19,33 +18,41 @@ const STRICT_GAP = 1e-6;
 const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
-const CONJ0521_CONSTRAINTS = ['<= 1', '= 1', '<= 1', '= 1', '> 1', '= 1'] as const;
-const DEFAULT_CONJ0521_OPTIONS = { hardLimitDrag: false } as const;
-const DEFAULT_CONJ0525_OPTIONS = { forceSum3: true, forceSum5: true, hardLimitDrag: false } as const;
+const DEFAULT_CORE_CASE_OPTIONS = { forceSum3: true, forceSum5: true, hardLimitDrag: false } as const;
 
 interface CircleGeometry {
   id: 'C2' | 'C5';
   center: Point;
 }
 
-type ConjConstraint = typeof CONJ0521_CONSTRAINTS[number];
+type CoreCaseConstraint = '<= 1' | '= 1' | '> 1';
 
-export interface Conj0521Options {
+interface CoreCasePointContext {
+  circles: CircleGeometry[];
+  aValues: number[];
+  bValues: number[];
+}
+
+interface CoreCasePointDefinition {
+  id: string;
+  label: string;
+  build: (context: CoreCasePointContext) => Point | null;
+}
+
+export interface CoreCaseOptions {
+  forceSum3: boolean;
+  forceSum5: boolean;
   hardLimitDrag: boolean;
 }
 
-export interface Conj0525Options extends Conj0521Options {
-  forceSum3: boolean;
-  forceSum5: boolean;
-}
-
-export interface Conj0521Point {
+export interface CoreCasePoint {
   id: string;
   label: string;
   point: Point | null;
+  enabled: boolean;
 }
 
-export interface Conj0521RegionRow {
+export interface CoreCaseRegionRow {
   index: number;
   a: number;
   b: number;
@@ -54,13 +61,18 @@ export interface Conj0521RegionRow {
   ok: boolean;
 }
 
-export interface Conj0521RenderResult {
+export interface CoreCaseRenderOptions {
+  enabledPointIds?: ReadonlySet<string> | readonly string[];
+}
+
+export interface CoreCaseRenderResult {
   base: AbUnionRenderResult;
   aValues: number[];
   bValues: number[];
   tValues: number[];
-  rows: Conj0521RegionRow[];
-  points: Conj0521Point[];
+  rows: CoreCaseRegionRow[];
+  points: CoreCasePoint[];
+  enabledPointCount: number;
   triangle: CoverTriangle | null;
   strictGap: number;
   status: string;
@@ -141,7 +153,7 @@ function writeTValues(state: AbUnionState, t: number[]): void {
   });
 }
 
-function enforceConjCommonState(
+function enforceCoreCaseCommonState(
   state: AbUnionState,
   fixedSums: Array<number | null>,
   defaultActiveRegions: boolean[],
@@ -168,33 +180,15 @@ function enforceConjCommonState(
   }
 }
 
-export function enforceConj0521Constraints(state: AbUnionState): void {
-  const t = readTValues(state);
-  const t0Input = clamp01((t[0] + t[1]) / 2);
-  let t2 = clamp01((t[2] + t[3]) / 2);
-  let t4 = clamp01((t[4] + t[5]) / 2);
-
-  if (t4 - t2 < STRICT_GAP) {
-    const center = clamp((t2 + t4) / 2, STRICT_GAP / 2, 1 - STRICT_GAP / 2);
-    t2 = center - STRICT_GAP / 2;
-    t4 = center + STRICT_GAP / 2;
-  }
-
-  const t0 = clamp(t0Input, t2, t4);
-  writeTValues(state, [t0, t0, t2, t2, t4, t4]);
-
-  enforceConjCommonState(state, [null, 1, null, 1, null, 1], [false, false, false, false, true, false]);
-}
-
-function conj0525Constraints(options: Conj0525Options): readonly ConjConstraint[] {
+function coreCaseConstraints(options: CoreCaseOptions): readonly CoreCaseConstraint[] {
   return ['<= 1', '<= 1', '<= 1', options.forceSum3 ? '= 1' : '<= 1', '> 1', options.forceSum5 ? '= 1' : '<= 1'];
 }
 
-function conj0525FixedSums(options: Conj0525Options): Array<number | null> {
+function coreCaseFixedSums(options: CoreCaseOptions): Array<number | null> {
   return [null, null, null, options.forceSum3 ? 1 : null, null, options.forceSum5 ? 1 : null];
 }
 
-function clampConj0525TValues(t: number[], options: Conj0525Options): number[] {
+function clampCoreCaseTValues(t: number[], options: CoreCaseOptions): number[] {
   let t2 = clamp01(options.forceSum3 ? (t[2] + t[3]) / 2 : t[2]);
   let t3 = clamp01(options.forceSum3 ? t2 : t[3]);
   let t4 = clamp01(options.forceSum5 ? (t[4] + t[5]) / 2 : t[4]);
@@ -217,7 +211,7 @@ function clampConj0525TValues(t: number[], options: Conj0525Options): number[] {
   return [t0, t1, t2, t3, t4, t5];
 }
 
-function clampConjRowAtMostOne(state: AbUnionState, index: number): void {
+function clampCoreCaseRowAtMostOne(state: AbUnionState, index: number): void {
   const previous = state.edgeDots[mod6(index - 1)];
   const current = state.edgeDots[mod6(index)];
   if (!previous || !current || current.left <= previous.right + 1e-9) return;
@@ -227,7 +221,7 @@ function clampConjRowAtMostOne(state: AbUnionState, index: number): void {
   }
 }
 
-function clampConj0525SplitRows(state: AbUnionState, options: Conj0525Options): void {
+function clampCoreCaseSplitRows(state: AbUnionState, options: CoreCaseOptions): void {
   const strictPrevious = state.edgeDots[3];
   const strictCurrent = state.edgeDots[4];
   if (strictPrevious && strictCurrent && strictCurrent.left <= strictPrevious.right + STRICT_GAP) {
@@ -238,30 +232,30 @@ function clampConj0525SplitRows(state: AbUnionState, options: Conj0525Options): 
   }
 
   for (const index of [0, 1, 2]) {
-    clampConjRowAtMostOne(state, index);
+    clampCoreCaseRowAtMostOne(state, index);
   }
   if (!options.forceSum3) {
-    clampConjRowAtMostOne(state, 3);
+    clampCoreCaseRowAtMostOne(state, 3);
   }
   if (!options.forceSum5) {
-    clampConjRowAtMostOne(state, 5);
+    clampCoreCaseRowAtMostOne(state, 5);
   }
 }
 
-export function enforceConj0525Constraints(
+export function enforceCoreCaseConstraints(
   state: AbUnionState,
-  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
+  options: CoreCaseOptions = DEFAULT_CORE_CASE_OPTIONS,
 ): void {
   if (!hasSplitEdgeDots(state)) {
-    writeTValues(state, clampConj0525TValues(readTValues(state), options));
+    writeTValues(state, clampCoreCaseTValues(readTValues(state), options));
   } else {
-    clampConj0525SplitRows(state, options);
+    clampCoreCaseSplitRows(state, options);
   }
 
-  enforceConjCommonState(state, conj0525FixedSums(options), [true, true, true, false, true, false]);
+  enforceCoreCaseCommonState(state, coreCaseFixedSums(options), [true, true, true, false, true, false]);
 }
 
-interface ConjDotSnapshot {
+interface CoreCaseDotSnapshot {
   edgeDots: AbUnionState['edgeDots'];
   lastOptimized: AbUnionState['lastOptimized'];
   status: string;
@@ -271,7 +265,7 @@ function copyEdgeDots(edgeDots: AbUnionState['edgeDots']): AbUnionState['edgeDot
   return edgeDots.map((edge) => ({ ...edge }));
 }
 
-function captureConjDotSnapshot(state: AbUnionState): ConjDotSnapshot {
+function captureCoreCaseDotSnapshot(state: AbUnionState): CoreCaseDotSnapshot {
   return {
     edgeDots: copyEdgeDots(state.edgeDots),
     lastOptimized: state.lastOptimized,
@@ -279,7 +273,7 @@ function captureConjDotSnapshot(state: AbUnionState): ConjDotSnapshot {
   };
 }
 
-function restoreConjDotSnapshot(state: AbUnionState, snapshot: ConjDotSnapshot): void {
+function restoreCoreCaseDotSnapshot(state: AbUnionState, snapshot: CoreCaseDotSnapshot): void {
   state.edgeDots = copyEdgeDots(snapshot.edgeDots);
   state.lastOptimized = snapshot.lastOptimized;
   state.status = snapshot.status;
@@ -291,13 +285,13 @@ function dotEdgeValue(state: AbUnionState, dot: AbUnionDotHandle): number {
   return dot.role === 'right' ? edge.right : edge.left;
 }
 
-function hardLimitConstraintOk(sum: number, constraint: ConjConstraint): boolean {
+function hardLimitConstraintOk(sum: number, constraint: CoreCaseConstraint): boolean {
   if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
   if (constraint === '> 1') return sum >= 1 + STRICT_GAP - 1e-9;
   return sum <= 1 + 1e-9;
 }
 
-function conjConstraintsSatisfied(state: AbUnionState, constraints: readonly ConjConstraint[]): boolean {
+function coreCaseConstraintsSatisfied(state: AbUnionState, constraints: readonly CoreCaseConstraint[]): boolean {
   const aValues = abUnionAValues(state);
   const bValues = abUnionBValues(state);
   return constraints.every((constraint, index) =>
@@ -305,28 +299,28 @@ function conjConstraintsSatisfied(state: AbUnionState, constraints: readonly Con
   );
 }
 
-function tryConjDotValueFromSnapshot(
+function tryCoreCaseDotValueFromSnapshot(
   state: AbUnionState,
   dot: AbUnionDotHandle,
   value: number,
-  constraints: readonly ConjConstraint[],
-  snapshot: ConjDotSnapshot,
+  constraints: readonly CoreCaseConstraint[],
+  snapshot: CoreCaseDotSnapshot,
 ): boolean {
-  restoreConjDotSnapshot(state, snapshot);
-  return setAbUnionDotValue(state, dot, value) && conjConstraintsSatisfied(state, constraints);
+  restoreCoreCaseDotSnapshot(state, snapshot);
+  return setAbUnionDotValue(state, dot, value) && coreCaseConstraintsSatisfied(state, constraints);
 }
 
-function moveConjDotHardLimited(
+function moveCoreCaseDotHardLimited(
   state: AbUnionState,
   dot: AbUnionDotHandle,
   value: number,
-  constraints: readonly ConjConstraint[],
+  constraints: readonly CoreCaseConstraint[],
 ): void {
-  const snapshot = captureConjDotSnapshot(state);
+  const snapshot = captureCoreCaseDotSnapshot(state);
   const start = dotEdgeValue(state, dot);
   const target = clamp01(value);
 
-  if (tryConjDotValueFromSnapshot(state, dot, target, constraints, snapshot)) {
+  if (tryCoreCaseDotValueFromSnapshot(state, dot, target, constraints, snapshot)) {
     return;
   }
 
@@ -334,61 +328,39 @@ function moveConjDotHardLimited(
   let invalid = target;
   for (let step = 0; step < BINARY_STEPS; step++) {
     const candidate = (valid + invalid) / 2;
-    if (tryConjDotValueFromSnapshot(state, dot, candidate, constraints, snapshot)) {
+    if (tryCoreCaseDotValueFromSnapshot(state, dot, candidate, constraints, snapshot)) {
       valid = candidate;
     } else {
       invalid = candidate;
     }
   }
 
-  if (tryConjDotValueFromSnapshot(state, dot, valid, constraints, snapshot)) {
+  if (tryCoreCaseDotValueFromSnapshot(state, dot, valid, constraints, snapshot)) {
     state.status = 'Hard-limit drag: constraint boundary reached.';
   } else {
-    restoreConjDotSnapshot(state, snapshot);
+    restoreCoreCaseDotSnapshot(state, snapshot);
   }
 }
 
-export function moveConj0521Dot(
+export function moveCoreCaseDot(
   state: AbUnionState,
   dot: AbUnionDotHandle,
   value: number,
-  options: Conj0521Options = DEFAULT_CONJ0521_OPTIONS,
+  options: CoreCaseOptions = DEFAULT_CORE_CASE_OPTIONS,
 ): void {
   if (options.hardLimitDrag) {
-    moveConjDotHardLimited(state, dot, value, CONJ0521_CONSTRAINTS);
+    moveCoreCaseDotHardLimited(state, dot, value, coreCaseConstraints(options));
   } else {
     setAbUnionDotValue(state, dot, value);
   }
 }
 
-export function moveConj0525Dot(
-  state: AbUnionState,
-  dot: AbUnionDotHandle,
-  value: number,
-  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
-): void {
-  if (options.hardLimitDrag) {
-    moveConjDotHardLimited(state, dot, value, conj0525Constraints(options));
-  } else {
-    setAbUnionDotValue(state, dot, value);
-  }
-}
-
-export function createDefaultConj0521State(): AbUnionState {
-  const state = createDefaultAbUnionState();
-  writeTValues(state, [0.45, 0.45, 0.35, 0.35, 0.55, 0.55]);
-  state.activeRegions = [false, false, false, false, true, false];
-  enforceConj0521Constraints(state);
-  state.status = '0521 constraints active.';
-  return state;
-}
-
-export function createDefaultConj0525State(): AbUnionState {
+export function createDefaultCoreCaseState(): AbUnionState {
   const state = createDefaultAbUnionState();
   writeTValues(state, [0.5, 0.42, 0.35, 0.35, 0.55, 0.55]);
   state.activeRegions = [true, true, true, false, true, false];
-  enforceConj0525Constraints(state);
-  state.status = '0525 constraints active.';
+  enforceCoreCaseConstraints(state);
+  state.status = 'Core Case constraints active.';
   return state;
 }
 
@@ -503,38 +475,8 @@ function closestCurvePointToV4(points: Point[]): Point | null {
   ));
 }
 
-function maxAdmissibleC(a: number, b: number): number {
-  const steps = 256;
-  let best = admissible(a, b, 0) ? 0 : -1;
-  let bestIndex = best >= 0 ? 0 : -1;
-
-  for (let index = 1; index <= steps; index++) {
-    const c = index / steps;
-    if (admissible(a, b, c)) {
-      best = c;
-      bestIndex = index;
-    }
-  }
-
-  if (best < 0) return 0;
-  if (bestIndex >= steps) return 1;
-
-  let low = best;
-  let high = (bestIndex + 1) / steps;
-  for (let iter = 0; iter < BINARY_STEPS; iter++) {
-    const mid = (low + high) / 2;
-    if (admissible(a, b, mid)) {
-      low = mid;
-    } else {
-      high = mid;
-    }
-  }
-  return clamp01(low);
-}
-
-function maxCPoint(index: number, a: number, b: number): Point {
-  const c = maxAdmissibleC(a, b);
-  return scale(1 - c, HEXAGON_VERTICES[index]);
+function v4CirclePoint(circle: CircleGeometry, a4: number, b4: number): Point | null {
+  return closestCurvePointToV4(boundaryIntersectionsWithCircle(circle, a4, b4));
 }
 
 function diagonalRedWitness(index: number, aValues: number[], bValues: number[]): Point | null {
@@ -544,7 +486,7 @@ function diagonalRedWitness(index: number, aValues: number[], bValues: number[])
   return findBoundaryOnParam(pointAt, red) ?? pointAt(1);
 }
 
-function constraintOk(sum: number, constraint: ConjConstraint): boolean {
+function constraintOk(sum: number, constraint: CoreCaseConstraint): boolean {
   if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
   if (constraint === '> 1') return sum > 1;
   return sum <= 1 + 1e-7;
@@ -553,8 +495,8 @@ function constraintOk(sum: number, constraint: ConjConstraint): boolean {
 function buildRows(
   aValues: number[],
   bValues: number[],
-  constraints: readonly ConjConstraint[],
-): Conj0521RegionRow[] {
+  constraints: readonly CoreCaseConstraint[],
+): CoreCaseRegionRow[] {
   return Array.from({ length: 6 }, (_, index) => {
     const sum = aValues[index] + bValues[index];
     const constraint = constraints[index];
@@ -592,13 +534,13 @@ function drawPolygon(ctx: CanvasRenderingContext2D, points: Point[], stroke: str
   ctx.restore();
 }
 
-function drawConjPoints(ctx: CanvasRenderingContext2D, points: Conj0521Point[]): void {
+function drawCoreCasePoints(ctx: CanvasRenderingContext2D, points: CoreCasePoint[]): void {
   ctx.save();
   ctx.font = '12px monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   for (const item of points) {
-    if (!item.point) continue;
+    if (!item.enabled || !item.point) continue;
     const point = mathToCanvas(item.point);
     ctx.beginPath();
     ctx.arc(point.x, point.y, 5.8, 0, 2 * Math.PI);
@@ -613,110 +555,113 @@ function drawConjPoints(ctx: CanvasRenderingContext2D, points: Conj0521Point[]):
   ctx.restore();
 }
 
-function drawOverlay(ctx: CanvasRenderingContext2D, circles: CircleGeometry[], points: Conj0521Point[], triangle: CoverTriangle | null): void {
+function drawOverlay(ctx: CanvasRenderingContext2D, circles: CircleGeometry[], points: CoreCasePoint[], triangle: CoverTriangle | null): void {
   for (const circle of circles) {
     drawCircleOverlay(ctx, circle);
   }
   if (triangle) {
     drawPolygon(ctx, triangle.vertices, '#eab308', 'rgba(250, 204, 21, 0.12)');
   }
-  drawConjPoints(ctx, points);
+  drawCoreCasePoints(ctx, points);
 }
 
-function v4CirclePoints(circles: CircleGeometry[], aValues: number[], bValues: number[]): Conj0521Point[] {
-  const p3 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[0], aValues[4], bValues[4]));
-  const p5 = closestCurvePointToV4(boundaryIntersectionsWithCircle(circles[1], aValues[4], bValues[4]));
-  return [
-    { id: 'P3', label: 'R4/C2', point: p3 },
-    { id: 'P5', label: 'R4/C5', point: p5 },
-  ];
+const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
+  {
+    id: 'P3',
+    label: 'R4/C2',
+    build: ({ circles, aValues, bValues }) => v4CirclePoint(circles[0], aValues[4], bValues[4]),
+  },
+  {
+    id: 'P5',
+    label: 'R4/C5',
+    build: ({ circles, aValues, bValues }) => v4CirclePoint(circles[1], aValues[4], bValues[4]),
+  },
+  {
+    id: 'D0',
+    label: 'red on O-V0',
+    build: ({ aValues, bValues }) => diagonalRedWitness(0, aValues, bValues),
+  },
+  {
+    id: 'D1',
+    label: 'red on O-V1',
+    build: ({ aValues, bValues }) => diagonalRedWitness(1, aValues, bValues),
+  },
+  {
+    id: 'D2',
+    label: 'red on O-V2',
+    build: ({ aValues, bValues }) => diagonalRedWitness(2, aValues, bValues),
+  },
+];
+
+export const CORE_CASE_POINT_IDS = CORE_CASE_POINT_DEFINITIONS.map((definition) => definition.id);
+
+export function isCoreCasePointId(value: string): boolean {
+  return CORE_CASE_POINT_IDS.includes(value);
 }
 
-function renderConj(
+function enabledPointSet(enabledPointIds: CoreCaseRenderOptions['enabledPointIds']): ReadonlySet<string> | null {
+  if (!enabledPointIds) return null;
+  return typeof (enabledPointIds as ReadonlySet<string>).has === 'function'
+    ? enabledPointIds as ReadonlySet<string>
+    : new Set(enabledPointIds as readonly string[]);
+}
+
+function buildCoreCasePoints(
+  context: CoreCasePointContext,
+  enabledIds: ReadonlySet<string> | null,
+): CoreCasePoint[] {
+  return CORE_CASE_POINT_DEFINITIONS.map((definition) => ({
+    id: definition.id,
+    label: definition.label,
+    point: definition.build(context),
+    enabled: enabledIds === null || enabledIds.has(definition.id),
+  }));
+}
+
+export function renderCoreCase(
   ctx: CanvasRenderingContext2D,
   state: AbUnionState,
   triangleState: TriangleState,
   localCs: number[],
-  enforce: (state: AbUnionState) => void,
-  constraints: readonly ConjConstraint[],
-  triangleName: string,
-  buildPoints: (circles: CircleGeometry[], aValues: number[], bValues: number[]) => Conj0521Point[],
-): Conj0521RenderResult {
-  enforce(state);
+  options: CoreCaseOptions = DEFAULT_CORE_CASE_OPTIONS,
+  renderOptions: CoreCaseRenderOptions = {},
+): CoreCaseRenderResult {
+  enforceCoreCaseConstraints(state, options);
   const base = renderAbUnion(ctx, state, triangleState, localCs, { computeTheta: false });
-  enforce(state);
+  enforceCoreCaseConstraints(state, options);
 
   const aValues = abUnionAValues(state);
   const bValues = abUnionBValues(state);
   const tValues = readTValues(state);
   const circles = circleGeometries(tValues);
-  const points = buildPoints(circles, aValues, bValues);
-  const concretePoints = points.flatMap((item) => item.point ? [item.point] : []);
-  const triangle = concretePoints.length === points.length
-    ? fitTriangle(triangleName, concretePoints, '#eab308')
+  const points = buildCoreCasePoints(
+    { circles, aValues, bValues },
+    enabledPointSet(renderOptions.enabledPointIds),
+  );
+  const enabledPoints = points.filter((item) => item.enabled);
+  const concretePoints = enabledPoints.flatMap((item) => item.point ? [item.point] : []);
+  const triangle = enabledPoints.length > 0 && concretePoints.length === enabledPoints.length
+    ? fitTriangle('Core Case', concretePoints, '#eab308')
     : null;
   drawOverlay(ctx, circles, points, triangle);
 
-  const missing = points.filter((item) => item.point === null).map((item) => item.id);
-  const status = missing.length === 0
-    ? 'ready'
-    : `missing ${missing.join(', ')}`;
+  const missing = enabledPoints.filter((item) => item.point === null).map((item) => item.id);
+  const status = enabledPoints.length === 0
+    ? 'no points selected'
+    : missing.length === 0
+      ? 'ready'
+      : `missing ${missing.join(', ')}`;
 
   return {
     base,
     aValues,
     bValues,
     tValues,
-    rows: buildRows(aValues, bValues, constraints),
+    rows: buildRows(aValues, bValues, coreCaseConstraints(options)),
     points,
+    enabledPointCount: enabledPoints.length,
     triangle,
     strictGap: aValues[4] + bValues[4] - 1,
     status,
   };
-}
-
-export function renderConj0521(
-  ctx: CanvasRenderingContext2D,
-  state: AbUnionState,
-  triangleState: TriangleState,
-  localCs: number[],
-): Conj0521RenderResult {
-  return renderConj(
-    ctx,
-    state,
-    triangleState,
-    localCs,
-    enforceConj0521Constraints,
-    CONJ0521_CONSTRAINTS,
-    '0521',
-    (circles, aValues, bValues) => [
-      ...v4CirclePoints(circles, aValues, bValues),
-      { id: 'G0', label: 'V0 max c', point: maxCPoint(0, aValues[0], bValues[0]) },
-      { id: 'G2', label: 'V2 max c', point: maxCPoint(2, aValues[2], bValues[2]) },
-    ],
-  );
-}
-
-export function renderConj0525(
-  ctx: CanvasRenderingContext2D,
-  state: AbUnionState,
-  triangleState: TriangleState,
-  localCs: number[],
-  options: Conj0525Options = DEFAULT_CONJ0525_OPTIONS,
-): Conj0521RenderResult {
-  return renderConj(
-    ctx,
-    state,
-    triangleState,
-    localCs,
-    (currentState) => enforceConj0525Constraints(currentState, options),
-    conj0525Constraints(options),
-    '0525',
-    (circles, aValues, bValues) => [
-      ...v4CirclePoints(circles, aValues, bValues),
-      { id: 'D0', label: 'red on O-V0', point: diagonalRedWitness(0, aValues, bValues) },
-      { id: 'D1', label: 'red on O-V1', point: diagonalRedWitness(1, aValues, bValues) },
-      { id: 'D2', label: 'red on O-V2', point: diagonalRedWitness(2, aValues, bValues) },
-    ],
-  );
 }

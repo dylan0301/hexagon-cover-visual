@@ -67,21 +67,14 @@ The `ab union` shape mode ports the standalone `hex_region_app.html` region expl
 - `export current` appends the current `a`, `b`, polygon vertices, and sampled coverage data to the experiment JSON. Repeated exports stay in the same JSON block until `clear exports`.
 - This mode is exploratory only; it does not change the normal `ab union` mask or hull algorithm.
 
-## `0521 conj` mode
+## `Core Case` mode
 
-`0521 conj` is a diagnostic AB-union slice for the May 21 conjecture reduction.
-
-- The mode uses one draggable point `X_i` per edge and enforces `a1+b1=a3+b3=a5+b5=1`, `a4+b4>1`, `a0+b0<=1`, and `a2+b2<=1`.
-- The control panel has `move`, `add`, and `delete` tools plus a `hard limit` checkbox; when checked, dot drags clamp at the active constraints instead of letting unrelated dots move to repair them.
-- The canvas reuses the AB-union overlay, then draws the two full radius-1 circles centered at `X2` and `X5`.
-- It marks two numerical intersections between the `R4` boundary and those circle boundaries, plus the `V0` and `V2` max-c points on `OV0` and `OV2`.
-- It fits and draws the smallest enclosing equilateral triangle for the four marked points and reports its side length in the right panel.
-
-## `0525 conj` mode
-
-`0525 conj` is the five-point variant of the diagnostic AB-union slice.
+`Core Case` is a diagnostic AB-union slice for the core obstruction case.
 
 - The mode enforces `a4+b4>1` and `a0+b0,a1+b1,a2+b2<=1`.
 - The control panel has independent checkboxes for forcing `a3+b3=1` and `a5+b5=1`; when unchecked, those rows use `<=1` instead.
 - The `hard limit` checkbox clamps dot drags at the active constraints instead of letting unrelated dots move to repair them.
-- It marks the two `R4`/circle intersections and three diagonal red-witness points, then fits the smallest enclosing equilateral triangle for the five marked points.
+- The canvas reuses the AB-union overlay, then draws the two full radius-1 circles centered at `X2` and `X5`.
+- It can mark the two `R4`/circle intersections and three diagonal red-witness points.
+- The point table has a `use` checkbox for each point. Unchecked points are hidden on the canvas and excluded from the enclosing-triangle fit.
+- If no points are checked, the triangle side is unavailable until at least one point is re-enabled.

@@ -169,8 +169,7 @@ export function setupInteraction(
       shapeMode !== 'free' &&
       shapeMode !== 'ab-union' &&
       shapeMode !== 'ab-hull-debug' &&
-      shapeMode !== 'conj-0521' &&
-      shapeMode !== 'conj-0525';
+      shapeMode !== 'core-case';
   }
 
   function getPointSeedUnderPoint(mouse: Point, pointerType: string): string | null {
@@ -204,8 +203,7 @@ export function setupInteraction(
       shapeMode === 'free' ||
       shapeMode === 'ab-union' ||
       shapeMode === 'ab-hull-debug' ||
-      shapeMode === 'conj-0521' ||
-      shapeMode === 'conj-0525'
+      shapeMode === 'core-case'
     ) {
       return { kind: 'none' };
     }
@@ -338,8 +336,7 @@ export function setupInteraction(
       shapeMode === 'free' ||
       shapeMode === 'ab-union' ||
       shapeMode === 'ab-hull-debug' ||
-      shapeMode === 'conj-0521' ||
-      shapeMode === 'conj-0525'
+      shapeMode === 'core-case'
     ) {
       updateCursor(mouse, pointerType);
       return;
@@ -426,8 +423,7 @@ export function setupInteraction(
     if (
       getShapeMode() === 'ab-union' ||
       getShapeMode() === 'ab-hull-debug' ||
-      getShapeMode() === 'conj-0521' ||
-      getShapeMode() === 'conj-0525'
+      getShapeMode() === 'core-case'
     ) {
       return;
     }

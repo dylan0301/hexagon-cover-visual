@@ -121,7 +121,6 @@ import {
   type AbUnionQuality,
   type AbUnionBoundaryRenderResult,
   type AbUnionRenderResult,
-  type AbUnionState,
   type AbUnionSumConstraintMode,
   type AbUnionTool,
 } from './abUnion';
@@ -142,16 +141,14 @@ import {
   type AbHullDebugResult,
 } from './abHullDebug';
 import {
-  createDefaultConj0521State,
-  createDefaultConj0525State,
-  moveConj0521Dot,
-  moveConj0525Dot,
-  renderConj0521,
-  renderConj0525,
-  type Conj0521Options,
-  type Conj0521RenderResult,
-  type Conj0525Options,
-} from './conj0521';
+  CORE_CASE_POINT_IDS,
+  createDefaultCoreCaseState,
+  isCoreCasePointId,
+  moveCoreCaseDot,
+  renderCoreCase,
+  type CoreCaseOptions,
+  type CoreCaseRenderResult,
+} from './coreCase';
 import {
   areaConjRequiredPoints,
   computeAreaConjResult,
@@ -246,10 +243,9 @@ let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
 let areaConjState = createDefaultAbUnionState();
-let conj0521State = createDefaultConj0521State();
-let conj0525State = createDefaultConj0525State();
-let conj0521Options: Conj0521Options = { hardLimitDrag: false };
-let conj0525Options: Conj0525Options = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
+let coreCaseState = createDefaultCoreCaseState();
+let coreCaseOptions: CoreCaseOptions = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
+let coreCaseEnabledPointIds = CORE_CASE_POINT_IDS.slice();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
 
@@ -297,11 +293,13 @@ interface ControllerSnapshot {
   ceStartOverrides: Record<string, number>;
   pointSeeds: SymmetricPointSeed[];
   selectedPointSeedId: string | null;
+  coreCaseEnabledPointIds: string[];
 }
 
-type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds'> & {
+type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseEnabledPointIds'> & {
   version?: 1 | 2 | 3 | 4;
   pointSeeds?: unknown;
+  coreCaseEnabledPointIds?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -401,6 +399,31 @@ function clearPointSeeds(): void {
   freeState.pointSeeds = [];
   freeState.selectedPointSeedId = null;
   freeState.status = 'Cleared point seeds.';
+}
+
+function sanitizeCoreCaseEnabledPointIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return CORE_CASE_POINT_IDS.slice();
+  }
+
+  const ids = value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && isCoreCasePointId(candidate),
+  );
+  return Array.from(new Set(ids));
+}
+
+function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
+  if (!isCoreCasePointId(pointId)) {
+    return;
+  }
+
+  const ids = new Set(coreCaseEnabledPointIds);
+  if (enabled) {
+    ids.add(pointId);
+  } else {
+    ids.delete(pointId);
+  }
+  coreCaseEnabledPointIds = CORE_CASE_POINT_IDS.filter((id) => ids.has(id));
 }
 
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
@@ -738,8 +761,7 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'ab-hull-debug' ||
     value === 'max-area' ||
     value === 'area-conj' ||
-    value === 'conj-0521' ||
-    value === 'conj-0525';
+    value === 'core-case';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -783,6 +805,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(ceStartOverrides),
     pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
     selectedPointSeedId: freeState.selectedPointSeedId,
+    coreCaseEnabledPointIds: coreCaseEnabledPointIds.slice(),
   };
 }
 
@@ -886,6 +909,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
     ? parsed.selectedPointSeedId
     : null;
+  const parsedCoreCaseEnabledPointIds = sanitizeCoreCaseEnabledPointIds(parsed.coreCaseEnabledPointIds);
 
   return {
     version: 4,
@@ -910,6 +934,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(parsed.ceStartOverrides),
     pointSeeds,
     selectedPointSeedId,
+    coreCaseEnabledPointIds: parsedCoreCaseEnabledPointIds,
   };
 }
 
@@ -939,6 +964,7 @@ function loadControllerSnapshot(raw: string): void {
   ceStartOverrides = { ...snapshot.ceStartOverrides };
   freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
   freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
+  coreCaseEnabledPointIds = snapshot.coreCaseEnabledPointIds.slice();
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -2920,48 +2946,36 @@ function countWord(count: number): string {
   return count.toString();
 }
 
-function conj0525ConstraintSummary(): string {
-  const r3 = conj0525Options.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
-  const r5 = conj0525Options.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
-  return `0525 slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
+function coreCaseConstraintSummary(): string {
+  const r3 = coreCaseOptions.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
+  const r5 = coreCaseOptions.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
+  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
 }
 
-function hasConj0525Options(options: Conj0521Options | Conj0525Options): options is Conj0525Options {
-  return 'forceSum3' in options && 'forceSum5' in options;
-}
-
-function renderConjPanel(
-  result: Conj0521RenderResult,
-  constraintsTitle: string,
-  boundaryState: AbUnionState | null = null,
-  options: Conj0521Options | Conj0525Options | null = null,
-  mode: '0521' | '0525' | null = null,
-): void {
-  const boundaryToolControls = boundaryState && mode
-    ? (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
-      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj-tool-mode="${mode}" data-conj-tool="${tool}">${areaConjToolText(tool)}</button>
-    `).join('')
-    : '';
-  const boundaryToolbar = boundaryState && mode ? `
+function renderCoreCasePanel(result: CoreCaseRenderResult): void {
+  const boundaryToolControls = (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
+      <button type="button" class="free-button${coreCaseState.tool === tool ? ' is-active' : ''}" data-core-case-tool="${tool}">${areaConjToolText(tool)}</button>
+    `).join('');
+  const boundaryToolbar = `
     <div class="ab-union-toolbar">
       <span>tool</span>
       ${boundaryToolControls}
     </div>
-    <div class="free-row"><span class="status-reserve">${escapeHtml(boundaryState.status)}</span></div>
-  ` : '';
-  const hardLimitControls = options && mode ? `
+    <div class="free-row"><span class="status-reserve">${escapeHtml(coreCaseState.status)}</span></div>
+  `;
+  const hardLimitControls = `
     <div class="ab-union-toolbar">
       <span>drag</span>
-      <label><input type="checkbox" data-conj-hard-limit="${mode}"${options.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
+      <label><input type="checkbox" data-core-case-hard-limit${coreCaseOptions.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
     </div>
-  ` : '';
-  const forceControls = options && hasConj0525Options(options) ? `
+  `;
+  const forceControls = `
     <div class="ab-union-toolbar">
       <span>force</span>
-      <label><input type="checkbox" data-conj0525-force-sum="3"${options.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
-      <label><input type="checkbox" data-conj0525-force-sum="5"${options.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="3"${coreCaseOptions.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="5"${coreCaseOptions.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
     </div>
-  ` : '';
+  `;
   const optionControls = `${hardLimitControls}${forceControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
@@ -2973,27 +2987,34 @@ function renderConjPanel(
       <td><span class="ab-union-pill ${row.ok ? 'is-good' : 'is-warn'}">${row.ok ? 'ok' : 'check'}</span></td>
     </tr>
   `).join('');
-  const pointHtml = result.points.map((item) => `
+  const pointHtml = result.points.map((item) => {
+    const xText = !item.enabled ? 'off' : item.point ? item.point.x.toFixed(5) : 'missing';
+    const yText = !item.enabled ? 'off' : item.point ? item.point.y.toFixed(5) : 'missing';
+    return `
     <tr>
+      <td><input type="checkbox" data-core-case-point="${escapeHtml(item.id)}"${item.enabled ? ' checked' : ''}/></td>
       <td>${escapeHtml(item.id)}</td>
       <td>${escapeHtml(item.label)}</td>
-      <td>${item.point ? item.point.x.toFixed(5) : 'missing'}</td>
-      <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
+      <td>${xText}</td>
+      <td>${yText}</td>
     </tr>
-  `).join('');
-  const edgeRowsHtml = boundaryState ? result.base.edgeRows.map((row) => `
+  `;
+  }).join('');
+  const edgeRowsHtml = result.base.edgeRows.map((row) => `
     <tr>
       <td>e${row.index}</td>
       <td>${row.split ? 'two' : 'one'}</td>
       <td>${row.left.toFixed(4)}</td>
       <td>${row.right.toFixed(4)}</td>
     </tr>
-  `).join('') : '';
-  const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
+  `).join('');
+  const sideText = result.triangle
+    ? result.triangle.side.toFixed(6)
+    : result.enabledPointCount === 0 ? 'no points selected' : 'missing points';
   const sideClass = result.triangle && result.triangle.side <= 1
     ? 'ab-union-ok'
     : result.triangle ? 'ab-union-bad' : '';
-  const pointCount = result.points.length;
+  const pointCount = result.enabledPointCount;
 
   abUnionControls.innerHTML = `
     ${boundaryToolbar}
@@ -3004,21 +3025,19 @@ function renderConjPanel(
       <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
       <span>status</span><strong class="status-reserve">${escapeHtml(result.status)}</strong>
     </div>
-    <div class="ab-union-section-title">${escapeHtml(constraintsTitle)}</div>
+    <div class="ab-union-section-title">Core Case constraints</div>
     <table class="ab-union-table">
       <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
       <tbody>${rowHtml}</tbody>
     </table>
-    ${boundaryState ? `
-      <div class="ab-union-section-title">edge dots</div>
-      <table class="ab-union-table">
-        <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
-        <tbody>${edgeRowsHtml}</tbody>
-      </table>
-    ` : ''}
-    <div class="ab-union-section-title">${countWord(pointCount)} points</div>
+    <div class="ab-union-section-title">edge dots</div>
     <table class="ab-union-table">
-      <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
+      <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+      <tbody>${edgeRowsHtml}</tbody>
+    </table>
+    <div class="ab-union-section-title">${countWord(pointCount)} selected points</div>
+    <table class="ab-union-table">
+      <thead><tr><th>use</th><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
       <tbody>${pointHtml}</tbody>
     </table>
   `;
@@ -3040,8 +3059,7 @@ function isCoverOverlayAvailable(): boolean {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'conj-0521' &&
-    shapeMode !== 'conj-0525';
+    shapeMode !== 'core-case';
 }
 
 function syncPointToolControls(): void {
@@ -3051,8 +3069,7 @@ function syncPointToolControls(): void {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'conj-0521' &&
-    shapeMode !== 'conj-0525';
+    shapeMode !== 'core-case';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -3075,10 +3092,8 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'Max Area';
   } else if (shapeMode === 'area-conj') {
     shapeTitle.textContent = 'Area Conj';
-  } else if (shapeMode === 'conj-0521') {
-    shapeTitle.textContent = '0521 conj';
-  } else if (shapeMode === 'conj-0525') {
-    shapeTitle.textContent = '0525 conj';
+  } else if (shapeMode === 'core-case') {
+    shapeTitle.textContent = 'Core Case';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -3093,18 +3108,17 @@ function syncModeButtons(): void {
   const abHullDebugActive = shapeMode === 'ab-hull-debug';
   const maxAreaActive = shapeMode === 'max-area';
   const areaConjActive = shapeMode === 'area-conj';
-  const conjActive = shapeMode === 'conj-0521' || shapeMode === 'conj-0525';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive;
+  const coreCaseActive = shapeMode === 'core-case';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !conjActive;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !coreCaseActive;
   abUnionPanelTitle.textContent = abHullDebugActive
     ? 'AB hull debug'
     : shapeMode === 'max-area' ? 'Max Area'
       : shapeMode === 'area-conj' ? 'Area Conj'
-        : shapeMode === 'conj-0521' ? '0521 conj'
-          : shapeMode === 'conj-0525' ? '0525 conj' : 'ab union region';
+        : shapeMode === 'core-case' ? 'Core Case' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -3284,50 +3298,33 @@ function render(): void {
     return;
   }
 
-  if (shapeMode === 'conj-0521') {
+  if (shapeMode === 'core-case') {
     manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    const result = renderConj0521(ctx, conj0521State, triangleState, manualLocalCs);
+    const result = renderCoreCase(
+      ctx,
+      coreCaseState,
+      triangleState,
+      manualLocalCs,
+      coreCaseOptions,
+      { enabledPointIds: coreCaseEnabledPointIds },
+    );
 
     gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
-    localCBounds.textContent = `0521 slice: a1+b1=a3+b3=a5+b5=1, a4+b4>1`;
+    localCBounds.textContent = coreCaseConstraintSummary();
     localCValues.textContent = result.triangle
-      ? `4-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
-      : `4-point side unavailable: ${result.status}`;
-    ceStatus.textContent = '0521 conj: CE/g-chain inactive';
+      ? `${result.enabledPointCount}-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `Core Case side unavailable: ${result.status}`;
+    ceStatus.textContent = 'Core Case: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
     ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
     ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
+    coverOverlayStatus.textContent = 'Core Case overlays: circles, selected points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConjPanel(result, '0521 constraints', conj0521State, conj0521Options, '0521');
-    syncControllerSnapshot();
-    return;
-  }
-
-  if (shapeMode === 'conj-0525') {
-    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
-
-    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
-    drawHexagon(ctx);
-    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs, conj0525Options);
-
-    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
-    localCBounds.textContent = conj0525ConstraintSummary();
-    localCValues.textContent = result.triangle
-      ? `5-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
-      : `5-point side unavailable: ${result.status}`;
-    ceStatus.textContent = '0525 conj: CE/g-chain inactive';
-    ceStatus.style.color = '#475569';
-    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
-    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
-    coverOverlayStatus.style.color = '#475569';
-    regionRenderer.render();
-    renderConjPanel(result, '0525 constraints', conj0525State, conj0525Options, '0525');
+    renderCoreCasePanel(result);
     syncControllerSnapshot();
     return;
   }
@@ -3883,10 +3880,9 @@ abUnionControls.addEventListener('click', async (event) => {
     render();
     return;
   }
-  const conjTool = target.dataset.conjTool;
-  const conjToolMode = target.dataset.conjToolMode;
-  if (conjTool === 'move' || conjTool === 'add' || conjTool === 'delete') {
-    setAbUnionTool(conjToolMode === '0521' ? conj0521State : conj0525State, conjTool);
+  const coreCaseTool = target.dataset.coreCaseTool;
+  if (coreCaseTool === 'move' || coreCaseTool === 'add' || coreCaseTool === 'delete') {
+    setAbUnionTool(coreCaseState, coreCaseTool);
     render();
     return;
   }
@@ -4067,23 +4063,24 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.conjHardLimit !== undefined) {
-    if (target.dataset.conjHardLimit === '0521') {
-      conj0521Options.hardLimitDrag = target.checked;
-    } else if (target.dataset.conjHardLimit === '0525') {
-      conj0525Options.hardLimitDrag = target.checked;
-    }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseHardLimit !== undefined) {
+    coreCaseOptions.hardLimitDrag = target.checked;
     render();
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.conj0525ForceSum !== undefined) {
-    if (target.dataset.conj0525ForceSum === '3') {
-      conj0525Options.forceSum3 = target.checked;
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseForceSum !== undefined) {
+    if (target.dataset.coreCaseForceSum === '3') {
+      coreCaseOptions.forceSum3 = target.checked;
       render();
-    } else if (target.dataset.conj0525ForceSum === '5') {
-      conj0525Options.forceSum5 = target.checked;
+    } else if (target.dataset.coreCaseForceSum === '5') {
+      coreCaseOptions.forceSum5 = target.checked;
       render();
     }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCasePoint !== undefined) {
+    setCoreCasePointEnabled(target.dataset.coreCasePoint, target.checked);
+    render();
     return;
   }
   if (target instanceof HTMLSelectElement && target.dataset.areaQuality !== undefined) {
@@ -4323,8 +4320,8 @@ setupAbUnionInteraction(
 
 setupAbUnionInteraction(
   canvas,
-  () => shapeMode === 'conj-0521',
-  () => conj0521State,
+  () => shapeMode === 'core-case',
+  () => coreCaseState,
   triangleState,
   () => manualLocalCs,
   (index, value) => {
@@ -4332,22 +4329,7 @@ setupAbUnionInteraction(
   },
   render,
   {
-    moveDotValue: (state, dot, value) => moveConj0521Dot(state, dot, value, conj0521Options),
-  },
-);
-
-setupAbUnionInteraction(
-  canvas,
-  () => shapeMode === 'conj-0525',
-  () => conj0525State,
-  triangleState,
-  () => manualLocalCs,
-  (index, value) => {
-    manualLocalCs[index] = clampToLocalCMax(value, 1);
-  },
-  render,
-  {
-    moveDotValue: (state, dot, value) => moveConj0525Dot(state, dot, value, conj0525Options),
+    moveDotValue: (state, dot, value) => moveCoreCaseDot(state, dot, value, coreCaseOptions),
   },
 );
 

@@ -1,0 +1,8 @@
+currently we have 0521 conj and 0525 conj mode.
+delete 0521 conj mode, and make it able to toggle the points in 0525 conj mode.
+rename the 0525 conj to 5 points
+ask me questions
+
+also i will add more points in the future.
+so don't name it 5 points, name it core case.
+also make the code so that the toggle feature can be adapted for future points
