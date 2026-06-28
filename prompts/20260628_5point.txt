@@ -27,3 +27,15 @@ It is true that they use the same c*. however, they go out of the red region and
 
 The c* value come from https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2004_admissible_set.md
 admissble set. I think issue is maximum minimum. review
+
+
+
+in the core case, admissible set of T4,
+there are 2 line segments and they meet at one point.
+Call that point P4. add it in the candidate of the core case.
+everything works well
+P4 is not the point on the diagonal.
+You have to look at the ab union set of T4, it consists of two arcs and two lines. P4 is the point where two lines meet
+
+https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2009_ab_union_curve_a_plus_b_gt_1.md
+look at this link for the ab union curve

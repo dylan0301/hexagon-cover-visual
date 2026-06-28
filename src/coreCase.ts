@@ -528,6 +528,47 @@ function algorithm2DiagonalPoint(index: number, aValues: number[], bValues: numb
   return scale(radius, HEXAGON_VERTICES[index]);
 }
 
+function pointFromLocalCoordinates(index: number, u: number, v: number): Point {
+  const vertex = HEXAGON_VERTICES[mod6(index)];
+  const out = edgeVector(index);
+  const inc = subtract(HEXAGON_VERTICES[mod6(index - 1)], vertex);
+  return add(vertex, add(scale(u, out), scale(v, inc)));
+}
+
+function strictAbUnionLineJunction(outLen: number, inLen: number): Point | null {
+  const sum = outLen + inLen;
+  const rho = outLen * outLen + outLen * inLen + inLen * inLen;
+  if (sum <= 1 || rho >= 1) return null;
+
+  const h = Math.sqrt(3) / 2;
+  const dSquared = 4 * rho - 3;
+  if (dSquared < -1e-9) return null;
+
+  const d = Math.sqrt(Math.max(0, dSquared));
+  const denominator = 2 * rho;
+  const alpha = h * (outLen + 2 * inLen - outLen * d) / denominator;
+  const beta = h * (outLen - inLen + sum * d) / denominator;
+  const gamma = h * (-outLen + inLen + sum * d) / denominator;
+  const delta = h * (2 * outLen + inLen - inLen * d) / denominator;
+  const omega = alpha * delta - gamma * beta;
+  if (omega <= 1e-12) return null;
+
+  const u = delta * (outLen * alpha - inLen * beta) / omega;
+  const v = alpha * (inLen * delta - outLen * gamma) / omega;
+  if (!Number.isFinite(u) || !Number.isFinite(v) || u < -1e-9 || v < -1e-9) return null;
+  return { x: Math.max(0, u), y: Math.max(0, v) };
+}
+
+function t4LineJunctionPoint(aValues: number[], bValues: number[]): Point | null {
+  const a4 = aValues[4];
+  const b4 = bValues[4];
+  const local = strictAbUnionLineJunction(b4, a4);
+  if (local === null) return null;
+
+  const point = pointFromLocalCoordinates(4, local.x, local.y);
+  return containsR4(point, a4, b4) ? point : null;
+}
+
 function constraintOk(sum: number, constraint: CoreCaseConstraint): boolean {
   if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
   if (constraint === '> 1') return sum > 1;
@@ -612,6 +653,11 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
     id: 'P3',
     label: 'R4/C2',
     build: ({ circles, aValues, bValues }) => v4CirclePoint(circles[0], aValues[4], bValues[4]),
+  },
+  {
+    id: 'P4',
+    label: 'T4 line-line junction',
+    build: ({ aValues, bValues }) => t4LineJunctionPoint(aValues, bValues),
   },
   {
     id: 'P5',
