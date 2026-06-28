@@ -244,7 +244,12 @@ let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
 let areaConjState = createDefaultAbUnionState();
 let coreCaseState = createDefaultCoreCaseState();
-let coreCaseOptions: CoreCaseOptions = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
+let coreCaseOptions: CoreCaseOptions = {
+  forceSum3: true,
+  forceSum5: true,
+  hardLimitDrag: false,
+  algorithm2Diagonals: false,
+};
 let coreCaseEnabledPointIds = CORE_CASE_POINT_IDS.slice();
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
@@ -275,7 +280,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 4;
+  version: 5;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -294,12 +299,14 @@ interface ControllerSnapshot {
   pointSeeds: SymmetricPointSeed[];
   selectedPointSeedId: string | null;
   coreCaseEnabledPointIds: string[];
+  coreCaseAlgorithm2Diagonals: boolean;
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseEnabledPointIds'> & {
-  version?: 1 | 2 | 3 | 4;
+  version?: 1 | 2 | 3 | 4 | 5;
   pointSeeds?: unknown;
   coreCaseEnabledPointIds?: unknown;
+  coreCaseAlgorithm2Diagonals?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -783,7 +790,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 4,
+    version: 5,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -806,6 +813,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
     selectedPointSeedId: freeState.selectedPointSeedId,
     coreCaseEnabledPointIds: coreCaseEnabledPointIds.slice(),
+    coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
   };
 }
 
@@ -817,7 +825,13 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) {
+  if (
+    parsed.version !== 1 &&
+    parsed.version !== 2 &&
+    parsed.version !== 3 &&
+    parsed.version !== 4 &&
+    parsed.version !== 5
+  ) {
     throw new Error('Unsupported snapshot version.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
@@ -899,6 +913,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   ) {
     throw new Error('Invalid ceStartOverrides.');
   }
+  if ('coreCaseAlgorithm2Diagonals' in parsed && typeof parsed.coreCaseAlgorithm2Diagonals !== 'boolean') {
+    throw new Error('Invalid coreCaseAlgorithm2Diagonals.');
+  }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
@@ -912,7 +929,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreCaseEnabledPointIds = sanitizeCoreCaseEnabledPointIds(parsed.coreCaseEnabledPointIds);
 
   return {
-    version: 4,
+    version: 5,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -935,6 +952,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     pointSeeds,
     selectedPointSeedId,
     coreCaseEnabledPointIds: parsedCoreCaseEnabledPointIds,
+    coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
   };
 }
 
@@ -965,6 +983,7 @@ function loadControllerSnapshot(raw: string): void {
   freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
   freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
   coreCaseEnabledPointIds = snapshot.coreCaseEnabledPointIds.slice();
+  coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -2976,7 +2995,13 @@ function renderCoreCasePanel(result: CoreCaseRenderResult): void {
       <label><input type="checkbox" data-core-case-force-sum="5"${coreCaseOptions.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
     </div>
   `;
-  const optionControls = `${hardLimitControls}${forceControls}`;
+  const dPointControls = `
+    <div class="ab-union-toolbar">
+      <span>D points</span>
+      <label><input type="checkbox" data-core-case-algorithm2-diagonals${coreCaseOptions.algorithm2Diagonals ? ' checked' : ''}/>algorithm 2</label>
+    </div>
+  `;
+  const optionControls = `${hardLimitControls}${forceControls}${dPointControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -4076,6 +4101,11 @@ abUnionControls.addEventListener('change', (event) => {
       coreCaseOptions.forceSum5 = target.checked;
       render();
     }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseAlgorithm2Diagonals !== undefined) {
+    coreCaseOptions.algorithm2Diagonals = target.checked;
+    render();
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.coreCasePoint !== undefined) {

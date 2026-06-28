@@ -18,7 +18,12 @@ const STRICT_GAP = 1e-6;
 const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
-const DEFAULT_CORE_CASE_OPTIONS = { forceSum3: true, forceSum5: true, hardLimitDrag: false } as const;
+const DEFAULT_CORE_CASE_OPTIONS = {
+  forceSum3: true,
+  forceSum5: true,
+  hardLimitDrag: false,
+  algorithm2Diagonals: false,
+} as const;
 
 interface CircleGeometry {
   id: 'C2' | 'C5';
@@ -31,6 +36,7 @@ interface CoreCasePointContext {
   circles: CircleGeometry[];
   aValues: number[];
   bValues: number[];
+  algorithm2Diagonals: boolean;
 }
 
 interface CoreCasePointDefinition {
@@ -43,6 +49,7 @@ export interface CoreCaseOptions {
   forceSum3: boolean;
   forceSum5: boolean;
   hardLimitDrag: boolean;
+  algorithm2Diagonals: boolean;
 }
 
 export interface CoreCasePoint {
@@ -486,6 +493,41 @@ function diagonalRedWitness(index: number, aValues: number[], bValues: number[])
   return findBoundaryOnParam(pointAt, red) ?? pointAt(1);
 }
 
+function algorithm2QuarticValue(c: number, p: number): number {
+  return c ** 4 - c ** 2 + p * c - p ** 2;
+}
+
+function algorithm2CStar(p: number, q: number): number {
+  const sum = p + q;
+  const m = Math.min(p, q);
+  const M = Math.max(p, q);
+  const transition = sum ** 4 - sum ** 2 + p * q;
+
+  if (transition >= 0) {
+    const denominator = 1 + Math.sqrt(Math.max(0, 4 * sum ** 2 - 3));
+    return clamp01(2 * M / denominator);
+  }
+
+  let low = clamp(sum, 0, 1);
+  let high = 1;
+  for (let step = 0; step < BINARY_STEPS; step++) {
+    const candidate = (low + high) / 2;
+    if (algorithm2QuarticValue(candidate, m) <= 0) {
+      low = candidate;
+    } else {
+      high = candidate;
+    }
+  }
+  return clamp01((low + high) / 2);
+}
+
+function algorithm2DiagonalPoint(index: number, aValues: number[], bValues: number[]): Point {
+  const p = 1 - bValues[4];
+  const q = 1 - aValues[4];
+  const radius = 1 - algorithm2CStar(p, q);
+  return scale(radius, HEXAGON_VERTICES[index]);
+}
+
 function constraintOk(sum: number, constraint: CoreCaseConstraint): boolean {
   if (constraint === '= 1') return Math.abs(sum - 1) <= 1e-7;
   if (constraint === '> 1') return sum > 1;
@@ -579,17 +621,23 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
   {
     id: 'D0',
     label: 'red on O-V0',
-    build: ({ aValues, bValues }) => diagonalRedWitness(0, aValues, bValues),
+    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(0, aValues, bValues)
+      : diagonalRedWitness(0, aValues, bValues),
   },
   {
     id: 'D1',
     label: 'red on O-V1',
-    build: ({ aValues, bValues }) => diagonalRedWitness(1, aValues, bValues),
+    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(1, aValues, bValues)
+      : diagonalRedWitness(1, aValues, bValues),
   },
   {
     id: 'D2',
     label: 'red on O-V2',
-    build: ({ aValues, bValues }) => diagonalRedWitness(2, aValues, bValues),
+    build: ({ aValues, bValues, algorithm2Diagonals }) => algorithm2Diagonals
+      ? algorithm2DiagonalPoint(2, aValues, bValues)
+      : diagonalRedWitness(2, aValues, bValues),
   },
 ];
 
@@ -612,7 +660,9 @@ function buildCoreCasePoints(
 ): CoreCasePoint[] {
   return CORE_CASE_POINT_DEFINITIONS.map((definition) => ({
     id: definition.id,
-    label: definition.label,
+    label: context.algorithm2Diagonals && definition.id.startsWith('D')
+      ? `algorithm 2 on O-V${definition.id.slice(1)}`
+      : definition.label,
     point: definition.build(context),
     enabled: enabledIds === null || enabledIds.has(definition.id),
   }));
@@ -635,7 +685,7 @@ export function renderCoreCase(
   const tValues = readTValues(state);
   const circles = circleGeometries(tValues);
   const points = buildCoreCasePoints(
-    { circles, aValues, bValues },
+    { circles, aValues, bValues, algorithm2Diagonals: options.algorithm2Diagonals },
     enabledPointSet(renderOptions.enabledPointIds),
   );
   const enabledPoints = points.filter((item) => item.enabled);

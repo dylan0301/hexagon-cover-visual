@@ -6,3 +6,24 @@ ask me questions
 also i will add more points in the future.
 so don't name it 5 points, name it core case.
 also make the code so that the toggle feature can be adapted for future points
+
+
+in the core case make a checkbox for each point on the hexagon boundary
+so that we only move it and fix others.
+we can only drag while maintiaining the constraints
+if none is selected, then all the dots can be moved like before maintining the constraints
+I think the hard limit is same as the new only move this dot. am i right
+then roll back to the hard limit and delete the only move this dot
+- roll backed
+
+
+https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/3XXX_CE0/31XX_Nplus1/310X_all_Vd0_five_point/3101_CE0_all_Vd0_algorithm2_index.md
+read this file, here is a proposed algorithm 2 of plotting 5 points in the core case.
+make a checkbox to change the D0 D1 D2 points according to this
+ask me questions
+
+tell me how the D0 D1 D2 are constructed. I think they are constructed wrong
+It is true that they use the same c*. however, they go out of the red region and this must not happen
+
+The c* value come from https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2004_admissible_set.md
+admissble set. I think issue is maximum minimum. review
