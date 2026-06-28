@@ -250,7 +250,7 @@ let coreCaseOptions: CoreCaseOptions = {
   hardLimitDrag: false,
   algorithm2Diagonals: false,
 };
-let coreCaseEnabledPointIds = CORE_CASE_POINT_IDS.slice();
+let coreCaseDisabledPointIds: string[] = [];
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
 
@@ -298,13 +298,14 @@ interface ControllerSnapshot {
   ceStartOverrides: Record<string, number>;
   pointSeeds: SymmetricPointSeed[];
   selectedPointSeedId: string | null;
-  coreCaseEnabledPointIds: string[];
+  coreCaseDisabledPointIds: string[];
   coreCaseAlgorithm2Diagonals: boolean;
 }
 
-type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseEnabledPointIds'> & {
+type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
   version?: 1 | 2 | 3 | 4 | 5;
   pointSeeds?: unknown;
+  coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
 };
@@ -408,9 +409,9 @@ function clearPointSeeds(): void {
   freeState.status = 'Cleared point seeds.';
 }
 
-function sanitizeCoreCaseEnabledPointIds(value: unknown): string[] {
+function sanitizeCoreCasePointIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
-    return CORE_CASE_POINT_IDS.slice();
+    return [];
   }
 
   const ids = value.filter((candidate): candidate is string =>
@@ -419,18 +420,34 @@ function sanitizeCoreCaseEnabledPointIds(value: unknown): string[] {
   return Array.from(new Set(ids));
 }
 
+function coreCaseDisabledPointIdsFromLegacyEnabled(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const enabledIds = new Set(value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
+  ));
+  return CORE_CASE_POINT_IDS.filter((id) => !enabledIds.has(id));
+}
+
+function pruneCoreCaseDisabledPointIds(currentPointIds: readonly string[]): void {
+  const currentIds = new Set(currentPointIds);
+  coreCaseDisabledPointIds = coreCaseDisabledPointIds.filter((id) => currentIds.has(id));
+}
+
 function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
   if (!isCoreCasePointId(pointId)) {
     return;
   }
 
-  const ids = new Set(coreCaseEnabledPointIds);
+  const ids = new Set(coreCaseDisabledPointIds);
   if (enabled) {
-    ids.add(pointId);
-  } else {
     ids.delete(pointId);
+  } else {
+    ids.add(pointId);
   }
-  coreCaseEnabledPointIds = CORE_CASE_POINT_IDS.filter((id) => ids.has(id));
+  coreCaseDisabledPointIds = sanitizeCoreCasePointIds(Array.from(ids));
 }
 
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
@@ -812,7 +829,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(ceStartOverrides),
     pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
     selectedPointSeedId: freeState.selectedPointSeedId,
-    coreCaseEnabledPointIds: coreCaseEnabledPointIds.slice(),
+    coreCaseDisabledPointIds: coreCaseDisabledPointIds.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
   };
 }
@@ -926,7 +943,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
     ? parsed.selectedPointSeedId
     : null;
-  const parsedCoreCaseEnabledPointIds = sanitizeCoreCaseEnabledPointIds(parsed.coreCaseEnabledPointIds);
+  const parsedCoreCaseDisabledPointIds = 'coreCaseDisabledPointIds' in parsed
+    ? sanitizeCoreCasePointIds(parsed.coreCaseDisabledPointIds)
+    : coreCaseDisabledPointIdsFromLegacyEnabled(parsed.coreCaseEnabledPointIds);
 
   return {
     version: 5,
@@ -951,7 +970,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(parsed.ceStartOverrides),
     pointSeeds,
     selectedPointSeedId,
-    coreCaseEnabledPointIds: parsedCoreCaseEnabledPointIds,
+    coreCaseDisabledPointIds: parsedCoreCaseDisabledPointIds,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
   };
 }
@@ -982,7 +1001,7 @@ function loadControllerSnapshot(raw: string): void {
   ceStartOverrides = { ...snapshot.ceStartOverrides };
   freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
   freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
-  coreCaseEnabledPointIds = snapshot.coreCaseEnabledPointIds.slice();
+  coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
@@ -3334,8 +3353,9 @@ function render(): void {
       triangleState,
       manualLocalCs,
       coreCaseOptions,
-      { enabledPointIds: coreCaseEnabledPointIds },
+      { disabledPointIds: coreCaseDisabledPointIds },
     );
+    pruneCoreCaseDisabledPointIds(result.points.map((point) => point.id));
 
     gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
     localCBounds.textContent = coreCaseConstraintSummary();

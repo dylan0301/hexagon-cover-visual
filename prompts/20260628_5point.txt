@@ -39,3 +39,9 @@ You have to look at the ab union set of T4, it consists of two arcs and two line
 
 https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2009_ab_union_curve_a_plus_b_gt_1.md
 look at this link for the ab union curve
+
+
+if we have 2 draggable edge points on one edge,
+those two points become the candidate for inside the triangle additionally to the current 6 points.
+they have same property as other points.
+ask me questions

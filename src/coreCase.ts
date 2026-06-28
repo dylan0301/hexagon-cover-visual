@@ -69,7 +69,7 @@ export interface CoreCaseRegionRow {
 }
 
 export interface CoreCaseRenderOptions {
-  enabledPointIds?: ReadonlySet<string> | readonly string[];
+  disabledPointIds?: ReadonlySet<string> | readonly string[];
 }
 
 export interface CoreCaseRenderResult {
@@ -690,19 +690,19 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
 export const CORE_CASE_POINT_IDS = CORE_CASE_POINT_DEFINITIONS.map((definition) => definition.id);
 
 export function isCoreCasePointId(value: string): boolean {
-  return CORE_CASE_POINT_IDS.includes(value);
+  return CORE_CASE_POINT_IDS.includes(value) || /^E[0-5][LR]$/.test(value);
 }
 
-function enabledPointSet(enabledPointIds: CoreCaseRenderOptions['enabledPointIds']): ReadonlySet<string> | null {
-  if (!enabledPointIds) return null;
-  return typeof (enabledPointIds as ReadonlySet<string>).has === 'function'
-    ? enabledPointIds as ReadonlySet<string>
-    : new Set(enabledPointIds as readonly string[]);
+function disabledPointSet(disabledPointIds: CoreCaseRenderOptions['disabledPointIds']): ReadonlySet<string> | null {
+  if (!disabledPointIds) return null;
+  return typeof (disabledPointIds as ReadonlySet<string>).has === 'function'
+    ? disabledPointIds as ReadonlySet<string>
+    : new Set(disabledPointIds as readonly string[]);
 }
 
 function buildCoreCasePoints(
   context: CoreCasePointContext,
-  enabledIds: ReadonlySet<string> | null,
+  disabledIds: ReadonlySet<string> | null,
 ): CoreCasePoint[] {
   return CORE_CASE_POINT_DEFINITIONS.map((definition) => ({
     id: definition.id,
@@ -710,8 +710,34 @@ function buildCoreCasePoints(
       ? `algorithm 2 on O-V${definition.id.slice(1)}`
       : definition.label,
     point: definition.build(context),
-    enabled: enabledIds === null || enabledIds.has(definition.id),
+    enabled: disabledIds === null || !disabledIds.has(definition.id),
   }));
+}
+
+function buildCoreCaseEdgeDotPoints(
+  state: AbUnionState,
+  disabledIds: ReadonlySet<string> | null,
+): CoreCasePoint[] {
+  return state.edgeDots.flatMap((edge, index) => {
+    if (!edge.split) return [];
+
+    const leftId = `E${index}L`;
+    const rightId = `E${index}R`;
+    return [
+      {
+        id: leftId,
+        label: `e${index} left dot`,
+        point: pointOnEdge(index, edge.left),
+        enabled: disabledIds === null || !disabledIds.has(leftId),
+      },
+      {
+        id: rightId,
+        label: `e${index} right dot`,
+        point: pointOnEdge(index, edge.right),
+        enabled: disabledIds === null || !disabledIds.has(rightId),
+      },
+    ];
+  });
 }
 
 export function renderCoreCase(
@@ -730,10 +756,14 @@ export function renderCoreCase(
   const bValues = abUnionBValues(state);
   const tValues = readTValues(state);
   const circles = circleGeometries(tValues);
-  const points = buildCoreCasePoints(
-    { circles, aValues, bValues, algorithm2Diagonals: options.algorithm2Diagonals },
-    enabledPointSet(renderOptions.enabledPointIds),
-  );
+  const disabledIds = disabledPointSet(renderOptions.disabledPointIds);
+  const points = [
+    ...buildCoreCasePoints(
+      { circles, aValues, bValues, algorithm2Diagonals: options.algorithm2Diagonals },
+      disabledIds,
+    ),
+    ...buildCoreCaseEdgeDotPoints(state, disabledIds),
+  ];
   const enabledPoints = points.filter((item) => item.enabled);
   const concretePoints = enabledPoints.flatMap((item) => item.point ? [item.point] : []);
   const triangle = enabledPoints.length > 0 && concretePoints.length === enabledPoints.length
