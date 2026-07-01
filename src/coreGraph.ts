@@ -13,6 +13,10 @@ const HEATMAP_PADDING = 44;
 const FONT_SIZE = 12;
 const MINIMUM_CURVE_COLOR = '#d946ef';
 const MINIMUM_CURVE_Z_OFFSET = 0.035;
+const SPECIAL_MINIMUM_CURVE_COLOR = '#0284c7';
+const SPECIAL_MINIMUM_CURVE_Z_OFFSET = 0.08;
+const SPECIAL_CURVE_NEIGHBORHOOD_B_WIDTH = 0.03;
+const SPECIAL_CURVE_DENSE_B_OFFSETS = [-0.03, -0.02, -0.01, 0, 0.01, 0.02, 0.03];
 
 export const CORE_GRAPH_SAMPLE_RATES = ['high', 'medium', 'low'] as const;
 export type CoreGraphSampleRate = typeof CORE_GRAPH_SAMPLE_RATES[number];
@@ -28,6 +32,8 @@ interface GridSamples {
   s: number[];
 }
 
+type MinimumCurve = Array<GridNode | null>;
+
 const SAMPLE_PROFILES: Record<CoreGraphSampleRate, SampleProfile> = {
   high: { aCount: 128, sCount: 96, boundaryBandCount: 64 },
   medium: { aCount: 64, sCount: 48, boundaryBandCount: 32 },
@@ -37,6 +43,7 @@ const SAMPLE_PROFILES: Record<CoreGraphSampleRate, SampleProfile> = {
 interface GridNode {
   a: number;
   b: number;
+  s: number;
   side: number | null;
   t: number;
 }
@@ -44,7 +51,7 @@ interface GridNode {
 interface GridData {
   samples: GridSamples;
   nodes: GridNode[];
-  minimumCurve: Array<GridNode | null>;
+  minimumCurve: MinimumCurve;
   minSide: number;
   maxSide: number;
 }
@@ -70,6 +77,10 @@ export interface CoreGraphRenderer {
   getRange(): { min: number; max: number };
   setSampleRate(value: CoreGraphSampleRate): void;
   getSampleRate(): CoreGraphSampleRate;
+  setDenseSpecialCurveSampling(value: boolean): void;
+  getDenseSpecialCurveSampling(): boolean;
+  setSpecialCurveNeighborhoodOnly(value: boolean): void;
+  getSpecialCurveNeighborhoodOnly(): boolean;
   setEnabledPointIds(ids: readonly string[]): void;
   getEnabledPointIds(): string[];
   setOnSelectionChange(callback: (sample: CoreCaseGraphSample) => void): void;
@@ -150,11 +161,32 @@ function buildSSamples(count: number, boundaryBandCount: number): number[] {
   return uniqueSortedSamples(samples);
 }
 
-function buildSamples(sampleRate: CoreGraphSampleRate): GridSamples {
+function domainSFromB(a: number, b: number): number | null {
+  const bLow = 1 - a + DOMAIN_EPS;
+  const bHigh = upperBoundary(a);
+  const width = bHigh - bLow;
+  if (width <= 1e-12) return null;
+  const s = (b - bLow) / width;
+  return s >= 0 && s <= 1 ? s : null;
+}
+
+function buildSamples(sampleRate: CoreGraphSampleRate, denseCurve: MinimumCurve | null = null): GridSamples {
   const profile = SAMPLE_PROFILES[sampleRate];
+  const s = buildSSamples(profile.sCount, profile.boundaryBandCount);
+  if (denseCurve !== null) {
+    for (const node of denseCurve) {
+      if (node === null) continue;
+      for (const offset of SPECIAL_CURVE_DENSE_B_OFFSETS) {
+        const extraS = domainSFromB(node.a, node.b + offset);
+        if (extraS !== null) {
+          s.push(extraS);
+        }
+      }
+    }
+  }
   return {
     a: buildASamples(profile.aCount),
-    s: buildSSamples(profile.sCount, profile.boundaryBandCount),
+    s: uniqueSortedSamples(s),
   };
 }
 
@@ -175,8 +207,12 @@ function sampleDomainNode(a: number, s: number): { a: number; b: number; valid: 
   };
 }
 
-function buildGrid(enabledPointIds: readonly string[], sampleRate: CoreGraphSampleRate): GridData {
-  const samples = buildSamples(sampleRate);
+function buildGrid(
+  enabledPointIds: readonly string[],
+  sampleRate: CoreGraphSampleRate,
+  denseCurve: MinimumCurve | null = null,
+): GridData {
+  const samples = buildSamples(sampleRate, denseCurve);
   const nodes: GridNode[] = [];
   let minSide = Number.POSITIVE_INFINITY;
   let maxSide = Number.NEGATIVE_INFINITY;
@@ -192,7 +228,7 @@ function buildGrid(enabledPointIds: readonly string[], sampleRate: CoreGraphSamp
         minSide = Math.min(minSide, side);
         maxSide = Math.max(maxSide, side);
       }
-      nodes.push({ a: domain.a, b: domain.b, side, t: 0 });
+      nodes.push({ a: domain.a, b: domain.b, s, side, t: 0 });
     }
   }
 
@@ -218,7 +254,7 @@ function gridIndex(i: number, j: number, samples: GridSamples): number {
   return j * samples.a.length + i;
 }
 
-function buildMinimumCurve(nodes: readonly GridNode[], samples: GridSamples): Array<GridNode | null> {
+function buildMinimumCurve(nodes: readonly GridNode[], samples: GridSamples): MinimumCurve {
   return samples.a.map((_, i) => {
     let best: GridNode | null = null;
     for (let j = 1; j < samples.s.length - 1; j++) {
@@ -240,6 +276,43 @@ function buildMinimumCurve(nodes: readonly GridNode[], samples: GridSamples): Ar
   });
 }
 
+function interpolateCurveB(curve: MinimumCurve, a: number): number | null {
+  let previous: GridNode | null = null;
+  for (const node of curve) {
+    if (node === null) continue;
+    if (Math.abs(node.a - a) < 1e-12) return node.b;
+    if (node.a > a) {
+      if (previous === null) return null;
+      const t = (a - previous.a) / Math.max(1e-12, node.a - previous.a);
+      return previous.b + (node.b - previous.b) * clamp01(t);
+    }
+    previous = node;
+  }
+  return previous !== null && Math.abs(previous.a - a) < 1e-12 ? previous.b : null;
+}
+
+function isInSpecialCurveNeighborhood(a: number, b: number, specialCurve: MinimumCurve): boolean {
+  const curveB = interpolateCurveB(specialCurve, a);
+  return curveB !== null && Math.abs(b - curveB) <= SPECIAL_CURVE_NEIGHBORHOOD_B_WIDTH;
+}
+
+function cellCenter(nodes: readonly GridNode[]): { a: number; b: number } {
+  return {
+    a: nodes.reduce((sum, node) => sum + node.a, 0) / nodes.length,
+    b: nodes.reduce((sum, node) => sum + node.b, 0) / nodes.length,
+  };
+}
+
+function isCellVisible(
+  nodes: readonly GridNode[],
+  specialCurve: MinimumCurve,
+  specialCurveNeighborhoodOnly: boolean,
+): boolean {
+  if (!specialCurveNeighborhoodOnly) return true;
+  const center = cellCenter(nodes);
+  return isInSpecialCurveNeighborhood(center.a, center.b, specialCurve);
+}
+
 function surfacePosition(node: GridNode): [number, number, number] {
   return [
     (node.a - 0.5) * SURFACE_SCALE,
@@ -248,7 +321,11 @@ function surfacePosition(node: GridNode): [number, number, number] {
   ];
 }
 
-function makeSurfaceGeometry(grid: GridData) {
+function makeSurfaceGeometry(
+  grid: GridData,
+  specialCurve: MinimumCurve,
+  specialCurveNeighborhoodOnly: boolean,
+) {
   const positions: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
@@ -273,6 +350,13 @@ function makeSurfaceGeometry(grid: GridData) {
       ) {
         continue;
       }
+      if (!isCellVisible(
+        [grid.nodes[bottomLeft], grid.nodes[bottomRight], grid.nodes[topRight], grid.nodes[topLeft]],
+        specialCurve,
+        specialCurveNeighborhoodOnly,
+      )) {
+        continue;
+      }
       indices.push(bottomLeft, bottomRight, topRight, bottomLeft, topRight, topLeft);
     }
   }
@@ -285,7 +369,7 @@ function makeSurfaceGeometry(grid: GridData) {
   return geometry;
 }
 
-function makeMinimumCurveGeometry(nodes: readonly (GridNode | null)[]) {
+function makeMinimumCurveGeometry(nodes: MinimumCurve, zOffset: number) {
   const positions: number[] = [];
   for (let i = 0; i < nodes.length - 1; i++) {
     const start = nodes[i];
@@ -296,10 +380,10 @@ function makeMinimumCurveGeometry(nodes: readonly (GridNode | null)[]) {
     positions.push(
       startPosition[0],
       startPosition[1],
-      startPosition[2] + MINIMUM_CURVE_Z_OFFSET,
+      startPosition[2] + zOffset,
       endPosition[0],
       endPosition[1],
-      endPosition[2] + MINIMUM_CURVE_Z_OFFSET,
+      endPosition[2] + zOffset,
     );
   }
 
@@ -347,6 +431,10 @@ export function createCoreGraphRenderer(
 
   let enabledPointIds = CORE_CASE_POINT_IDS.slice();
   let sampleRate: CoreGraphSampleRate = 'high';
+  let denseSpecialCurveSampling = false;
+  let specialCurveNeighborhoodOnly = false;
+  const specialGrid = buildGrid(CORE_CASE_POINT_IDS, 'high');
+  const specialCurve = specialGrid.minimumCurve;
   let grid = buildGrid(enabledPointIds, sampleRate);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
@@ -361,7 +449,7 @@ export function createCoreGraphRenderer(
   webgl.setClearColor('#ffffff', 1);
 
   const surface = new THREE.Mesh(
-    makeSurfaceGeometry(grid),
+    makeSurfaceGeometry(grid, specialCurve, specialCurveNeighborhoodOnly),
     new THREE.MeshStandardMaterial({
       side: THREE.DoubleSide,
       vertexColors: true,
@@ -372,10 +460,16 @@ export function createCoreGraphRenderer(
   scene.add(surface);
 
   const minimumCurve = new THREE.LineSegments(
-    makeMinimumCurveGeometry(grid.minimumCurve),
+    makeMinimumCurveGeometry(grid.minimumCurve, MINIMUM_CURVE_Z_OFFSET),
     new THREE.LineBasicMaterial({ color: MINIMUM_CURVE_COLOR }),
   );
   scene.add(minimumCurve);
+
+  const specialMinimumCurve = new THREE.LineSegments(
+    makeMinimumCurveGeometry(specialCurve, SPECIAL_MINIMUM_CURVE_Z_OFFSET),
+    new THREE.LineBasicMaterial({ color: SPECIAL_MINIMUM_CURVE_COLOR }),
+  );
+  scene.add(specialMinimumCurve);
 
   scene.add(makeBaseGrid());
   scene.add(new THREE.AmbientLight('#ffffff', 1.9));
@@ -417,6 +511,12 @@ export function createCoreGraphRenderer(
     selection = nearestValidSelection() ?? selection;
   }
 
+  function refreshSurfaceGeometry(): void {
+    const nextGeometry = makeSurfaceGeometry(grid, specialCurve, specialCurveNeighborhoodOnly);
+    surface.geometry.dispose();
+    surface.geometry = nextGeometry;
+  }
+
   function normalizeSide(side: number): number {
     return (side - grid.minSide) / (grid.maxSide - grid.minSide);
   }
@@ -433,7 +533,13 @@ export function createCoreGraphRenderer(
   }
 
   function updateMarker(): void {
-    if (!finiteSide(selection.side)) {
+    if (
+      !finiteSide(selection.side) ||
+      (
+        specialCurveNeighborhoodOnly &&
+        !isInSpecialCurveNeighborhood(selection.a, selection.b, specialCurve)
+      )
+    ) {
       marker.visible = false;
       return;
     }
@@ -563,6 +669,9 @@ export function createCoreGraphRenderer(
         if (corners.some((node) => node.side === null)) {
           continue;
         }
+        if (!isCellVisible(corners, specialCurve, specialCurveNeighborhoodOnly)) {
+          continue;
+        }
         const t = corners.reduce((sum, node) => sum + node.t, 0) / corners.length;
         const points = corners.map((node) => domainToHeatmap(node.a, node.b));
         ctx.beginPath();
@@ -602,6 +711,9 @@ export function createCoreGraphRenderer(
           getNode(i, j + 1),
         ];
         if (corners.some((node) => node.side === null)) {
+          continue;
+        }
+        if (!isCellVisible(corners, specialCurve, specialCurveNeighborhoodOnly)) {
           continue;
         }
 
@@ -665,17 +777,17 @@ export function createCoreGraphRenderer(
     ctx.restore();
   }
 
-  function drawMinimumCurve(): void {
+  function drawCurve(curve: MinimumCurve, color: string, lineWidth: number, haloWidth: number): void {
     const ctx = heatmapContext;
 
-    function strokeCurve(color: string, lineWidth: number): void {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth;
+    function strokeCurve(strokeColor: string, strokeWidth: number): void {
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = strokeWidth;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.beginPath();
       let drawing = false;
-      for (const node of grid.minimumCurve) {
+      for (const node of curve) {
         if (node === null) {
           drawing = false;
           continue;
@@ -692,12 +804,23 @@ export function createCoreGraphRenderer(
     }
 
     ctx.save();
-    strokeCurve('rgba(255, 255, 255, 0.9)', 5);
-    strokeCurve(MINIMUM_CURVE_COLOR, 2.4);
+    strokeCurve('rgba(255, 255, 255, 0.9)', haloWidth);
+    strokeCurve(color, lineWidth);
     ctx.restore();
   }
 
+  function drawMinimumCurves(): void {
+    drawCurve(grid.minimumCurve, MINIMUM_CURVE_COLOR, 2.4, 5);
+    drawCurve(specialCurve, SPECIAL_MINIMUM_CURVE_COLOR, 2.8, 6);
+  }
+
   function drawSelectionMarker(): void {
+    if (
+      specialCurveNeighborhoodOnly &&
+      !isInSpecialCurveNeighborhood(selection.a, selection.b, specialCurve)
+    ) {
+      return;
+    }
     const ctx = heatmapContext;
     const point = domainToHeatmap(selection.a, selection.b);
     ctx.save();
@@ -724,7 +847,7 @@ export function createCoreGraphRenderer(
       drawContour(grid.minSide + (grid.maxSide - grid.minSide) * fraction, 'rgba(255, 255, 255, 0.62)', 1.2);
     }
     drawContour(sliceK, '#111827', 2.2);
-    drawMinimumCurve();
+    drawMinimumCurves();
     drawSelectionMarker();
   }
 
@@ -759,11 +882,9 @@ export function createCoreGraphRenderer(
   }
 
   function rebuildGrid(): void {
-    grid = buildGrid(enabledPointIds, sampleRate);
-    const nextGeometry = makeSurfaceGeometry(grid);
-    surface.geometry.dispose();
-    surface.geometry = nextGeometry;
-    const nextCurveGeometry = makeMinimumCurveGeometry(grid.minimumCurve);
+    grid = buildGrid(enabledPointIds, sampleRate, denseSpecialCurveSampling ? specialCurve : null);
+    refreshSurfaceGeometry();
+    const nextCurveGeometry = makeMinimumCurveGeometry(grid.minimumCurve, MINIMUM_CURVE_Z_OFFSET);
     minimumCurve.geometry.dispose();
     minimumCurve.geometry = nextCurveGeometry;
     sliceK = clamp(sliceK, grid.minSide, grid.maxSide);
@@ -881,6 +1002,23 @@ export function createCoreGraphRenderer(
     },
     getSampleRate(): CoreGraphSampleRate {
       return sampleRate;
+    },
+    setDenseSpecialCurveSampling(value: boolean): void {
+      if (value === denseSpecialCurveSampling) return;
+      denseSpecialCurveSampling = value;
+      rebuildGrid();
+    },
+    getDenseSpecialCurveSampling(): boolean {
+      return denseSpecialCurveSampling;
+    },
+    setSpecialCurveNeighborhoodOnly(value: boolean): void {
+      if (value === specialCurveNeighborhoodOnly) return;
+      specialCurveNeighborhoodOnly = value;
+      refreshSurfaceGeometry();
+      render();
+    },
+    getSpecialCurveNeighborhoodOnly(): boolean {
+      return specialCurveNeighborhoodOnly;
     },
     setEnabledPointIds(ids: readonly string[]): void {
       const normalized = normalizeEnabledPointIds(ids);

@@ -121,6 +121,13 @@ canvas {
   font: inherit;
 }
 
+#core-sample-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 #core-heatmap-canvas {
   aspect-ratio: 1;
 }

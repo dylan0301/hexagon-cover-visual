@@ -220,6 +220,8 @@ const coreGraphPanel = document.getElementById('core-graph-panel') as HTMLDivEle
 const coreGraphStatus = document.getElementById('core-graph-status') as HTMLDivElement;
 const corePointControls = document.getElementById('core-point-controls') as HTMLDivElement;
 const coreSampleRateSelect = document.getElementById('core-sample-rate-select') as HTMLSelectElement;
+const coreDenseSpecialCurveToggle = document.getElementById('core-dense-special-curve-toggle') as HTMLInputElement;
+const coreSpecialNeighborhoodToggle = document.getElementById('core-special-neighborhood-toggle') as HTMLInputElement;
 const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
 const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
 const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
@@ -299,7 +301,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 7;
+  version: 8;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -322,10 +324,12 @@ interface ControllerSnapshot {
   coreCaseAlgorithm2Diagonals: boolean;
   coreGraphDisabledPointIds: string[];
   coreGraphSampleRate: CoreGraphSampleRate;
+  coreGraphDenseSpecialCurveSampling: boolean;
+  coreGraphSpecialCurveNeighborhoodOnly: boolean;
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
-  version?: 7;
+  version?: 8;
   pointSeeds?: unknown;
   coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
@@ -333,6 +337,8 @@ type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'poin
   coreCaseAlgorithm2Diagonals?: unknown;
   coreGraphDisabledPointIds?: unknown;
   coreGraphSampleRate?: unknown;
+  coreGraphDenseSpecialCurveSampling?: unknown;
+  coreGraphSpecialCurveNeighborhoodOnly?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -1011,7 +1017,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 7,
+    version: 8,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -1038,6 +1044,8 @@ function getControllerSnapshot(): ControllerSnapshot {
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
     coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
     coreGraphSampleRate: coreGraphRenderer.getSampleRate(),
+    coreGraphDenseSpecialCurveSampling: coreGraphRenderer.getDenseSpecialCurveSampling(),
+    coreGraphSpecialCurveNeighborhoodOnly: coreGraphRenderer.getSpecialCurveNeighborhoodOnly(),
   };
 }
 
@@ -1049,8 +1057,8 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 7) {
-    throw new Error('Unsupported snapshot version. Current version is 7.');
+  if (parsed.version !== 8) {
+    throw new Error('Unsupported snapshot version. Current version is 8.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
     throw new Error('Invalid shapeMode.');
@@ -1137,6 +1145,12 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   if (!isCoreGraphSampleRate(parsed.coreGraphSampleRate)) {
     throw new Error('Invalid coreGraphSampleRate.');
   }
+  if (typeof parsed.coreGraphDenseSpecialCurveSampling !== 'boolean') {
+    throw new Error('Invalid coreGraphDenseSpecialCurveSampling.');
+  }
+  if (typeof parsed.coreGraphSpecialCurveNeighborhoodOnly !== 'boolean') {
+    throw new Error('Invalid coreGraphSpecialCurveNeighborhoodOnly.');
+  }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
@@ -1156,7 +1170,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreGraphDisabledPointIds = sanitizeCoreGraphPointIds(parsed.coreGraphDisabledPointIds);
 
   return {
-    version: 7,
+    version: 8,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -1183,6 +1197,8 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
     coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
     coreGraphSampleRate: parsed.coreGraphSampleRate,
+    coreGraphDenseSpecialCurveSampling: parsed.coreGraphDenseSpecialCurveSampling,
+    coreGraphSpecialCurveNeighborhoodOnly: parsed.coreGraphSpecialCurveNeighborhoodOnly,
   };
 }
 
@@ -1216,6 +1232,8 @@ function loadControllerSnapshot(raw: string): void {
   coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
   coreGraphRenderer.setSampleRate(snapshot.coreGraphSampleRate);
+  coreGraphRenderer.setDenseSpecialCurveSampling(snapshot.coreGraphDenseSpecialCurveSampling);
+  coreGraphRenderer.setSpecialCurveNeighborhoodOnly(snapshot.coreGraphSpecialCurveNeighborhoodOnly);
   coreGraphRenderer.setEnabledPointIds(
     CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
   );
@@ -3223,6 +3241,8 @@ function syncCoreGraphPanel(): void {
   coreSliceSlider.value = sliceK.toString();
   coreSliceValueLabel.textContent = sliceK.toFixed(6);
   coreSampleRateSelect.value = coreGraphRenderer.getSampleRate();
+  coreDenseSpecialCurveToggle.checked = coreGraphRenderer.getDenseSpecialCurveSampling();
+  coreSpecialNeighborhoodToggle.checked = coreGraphRenderer.getSpecialCurveNeighborhoodOnly();
   coreGraphStatus.textContent = sample.side === null
     ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
     : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
@@ -3776,6 +3796,16 @@ coreSampleRateSelect.addEventListener('change', () => {
     return;
   }
   coreGraphRenderer.setSampleRate(requested);
+  render();
+});
+
+coreDenseSpecialCurveToggle.addEventListener('change', () => {
+  coreGraphRenderer.setDenseSpecialCurveSampling(coreDenseSpecialCurveToggle.checked);
+  render();
+});
+
+coreSpecialNeighborhoodToggle.addEventListener('change', () => {
+  coreGraphRenderer.setSpecialCurveNeighborhoodOnly(coreSpecialNeighborhoodToggle.checked);
   render();
 });
 
