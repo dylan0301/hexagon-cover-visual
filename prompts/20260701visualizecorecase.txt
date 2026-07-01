@@ -35,3 +35,7 @@ high medium low. high is current.
 
 just reject all old snapshots
 
+remember the pink minimum curve for the 6 points all toggled on.
+make a checkbox where we sample even more around that curve.
+and make the minimum curve for 6 points special and always show it even some points toggled off, color it differently.
+make a checkbox if on, only show the neighborhood of that special curve both in the heatmap and 3d
