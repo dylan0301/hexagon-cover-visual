@@ -22,3 +22,7 @@ at the a4 b4 point
 I mean if P5 is missing, P5 becomes the b4/a5 point on the hex edge
 
 make it much denser sampling around the boundary
+
+
+both in core case and core f(a,b) mode,
+color other color which of the points lie on the minimal triangle.

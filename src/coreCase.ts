@@ -18,6 +18,7 @@ const STRICT_GAP = 1e-6;
 const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
+const TRIANGLE_SUPPORT_TOL = 1e-6;
 const DEFAULT_CORE_CASE_OPTIONS = {
   forceSum3: true,
   forceSum5: true,
@@ -657,22 +658,56 @@ function drawPolygon(ctx: CanvasRenderingContext2D, points: Point[], stroke: str
   ctx.restore();
 }
 
-function drawCoreCasePoints(ctx: CanvasRenderingContext2D, points: CoreCasePoint[]): void {
+function supportPointIds(points: CoreCasePoint[], triangle: CoverTriangle | null): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!triangle) return ids;
+  const enabledPoints = points.filter((item): item is CoreCasePoint & { point: Point } =>
+    item.enabled && item.point !== null,
+  );
+  if (enabledPoints.length === 0) return ids;
+
+  for (let sideIndex = 0; sideIndex < triangle.normals.length; sideIndex++) {
+    const normal = triangle.normals[sideIndex];
+    const lambda = triangle.lambdas[sideIndex];
+    const projections = enabledPoints.map((item) => ({
+      item,
+      value: dot(normal, item.point),
+    }));
+    const maxProjection = Math.max(...projections.map((projection) => projection.value));
+    if (Math.abs(lambda - maxProjection) > TRIANGLE_SUPPORT_TOL) {
+      continue;
+    }
+    for (const projection of projections) {
+      if (Math.abs(projection.value - maxProjection) <= TRIANGLE_SUPPORT_TOL) {
+        ids.add(projection.item.id);
+      }
+    }
+  }
+
+  return ids;
+}
+
+function drawCoreCasePoints(
+  ctx: CanvasRenderingContext2D,
+  points: CoreCasePoint[],
+  supportIds: ReadonlySet<string>,
+): void {
   ctx.save();
   ctx.font = '12px monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   for (const item of points) {
     if (!item.enabled || !item.point) continue;
+    const isSupport = supportIds.has(item.id);
     const point = mathToCanvas(item.point);
     ctx.beginPath();
-    ctx.arc(point.x, point.y, 5.8, 0, 2 * Math.PI);
-    ctx.fillStyle = '#fef3c7';
+    ctx.arc(point.x, point.y, isSupport ? 6.4 : 5.8, 0, 2 * Math.PI);
+    ctx.fillStyle = isSupport ? '#dbeafe' : '#fef3c7';
     ctx.fill();
-    ctx.strokeStyle = '#92400e';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isSupport ? '#2563eb' : '#92400e';
+    ctx.lineWidth = isSupport ? 2.7 : 2;
     ctx.stroke();
-    ctx.fillStyle = '#78350f';
+    ctx.fillStyle = isSupport ? '#1d4ed8' : '#78350f';
     ctx.fillText(item.id, point.x + 7, point.y - 7);
   }
   ctx.restore();
@@ -685,7 +720,7 @@ function drawOverlay(ctx: CanvasRenderingContext2D, circles: CircleGeometry[], p
   if (triangle) {
     drawPolygon(ctx, triangle.vertices, '#eab308', 'rgba(250, 204, 21, 0.12)');
   }
-  drawCoreCasePoints(ctx, points);
+  drawCoreCasePoints(ctx, points, supportPointIds(points, triangle));
 }
 
 function inLocalHexFootprint(u: number, v: number): boolean {
