@@ -78,6 +78,55 @@ canvas {
   display: none;
 }
 
+#core-graph-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#core-graph-panel[hidden] {
+  display: none;
+}
+
+#core-surface-canvas {
+  aspect-ratio: 5 / 3;
+  cursor: grab;
+}
+
+#core-point-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+#core-point-controls label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+#core-heatmap-canvas {
+  aspect-ratio: 1;
+}
+
+#core-slice-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+#core-slice-row input[type="range"] {
+  flex: 1;
+  min-width: 180px;
+}
+
 #strict-check-panel {
   display: flex;
   flex-direction: column;

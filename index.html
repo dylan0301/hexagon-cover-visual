@@ -38,6 +38,9 @@
           <button type="button" class="shape-button" data-shape-mode="core-case">
             Core Case
           </button>
+          <button type="button" class="shape-button" data-shape-mode="core-graph">
+            Core f(a,b)
+          </button>
         </div>
         <div id="strict-check-panel">
           <label id="strict-check-toggle-row" for="strict-check-toggle">
@@ -181,6 +184,26 @@
         <div id="ab-union-panel" hidden>
           <div class="panel-title" id="ab-union-panel-title">ab union region</div>
           <div id="ab-union-controls"></div>
+        </div>
+        <div id="core-graph-panel" hidden>
+          <div class="panel-title">Core f(a,b)</div>
+          <div class="readout" id="core-graph-status">loading core graph</div>
+          <div id="core-point-controls"></div>
+          <canvas id="core-surface-canvas" width="600" height="360"></canvas>
+          <div id="core-slice-row">
+            <label for="core-slice-slider">
+              k = <span id="core-slice-value">0.000000</span>
+            </label>
+            <input
+              type="range"
+              id="core-slice-slider"
+              min="0"
+              max="1"
+              step="0.000001"
+              value="0"
+            />
+          </div>
+          <canvas id="core-heatmap-canvas" width="600" height="600"></canvas>
         </div>
         <div id="slider-row" hidden>
           <label for="c-slider">c = <span id="c-value">0.50</span></label>

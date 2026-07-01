@@ -1,0 +1,24 @@
+I want to visualize the following function:
+in the core case
+f(a,b) = a is a4 and b is b4, then the side length of minimal enclosing triangle diameter in the core case.
+we can on toggle algorithm 2, and the 6 points P3 P4 P5 D0 D1 D2.
+the other tools as move add delete core point will be implemented later, not yet
+also the force will be implemented later.
+just reuse the core case codes.
+suggest me how to visualize this 3d graph.
+let me inspect the graph itself, and also let me inspect the slices f(a,b) = k curve for fixed k
+i want to make a new mode of this visualization.
+
+in the left view,
+plot the a_4, b_4 points, and show the ab union region for T4.
+also make toggle boxes for each of the 6 points.
+and sample much more near the boundary of the region a+b>1 a^2+b^2+ab<=1
+
+how are P3 and P5 determined? are they from the intersection of ab union set of T4 and the circle?
+or only the lines of the ab union set of T4 and the circle intersection?
+
+in the plotting P3 and P5 points, if ab union set for T4 is nonempty but P3 and P5 doesn't exist, then plot the P3 and P5
+at the a4 b4 point
+I mean if P5 is missing, P5 becomes the b4/a5 point on the hex edge
+
+make it much denser sampling around the boundary

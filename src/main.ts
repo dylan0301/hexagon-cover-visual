@@ -143,12 +143,14 @@ import {
 import {
   CORE_CASE_POINT_IDS,
   createDefaultCoreCaseState,
+  drawCoreCaseGraphSample,
   isCoreCasePointId,
   moveCoreCaseDot,
   renderCoreCase,
   type CoreCaseOptions,
   type CoreCaseRenderResult,
 } from './coreCase';
+import { createCoreGraphRenderer } from './coreGraph';
 import {
   areaConjRequiredPoints,
   computeAreaConjResult,
@@ -210,6 +212,14 @@ const freeStateLoadButton = document.getElementById('free-state-load') as HTMLBu
 const abUnionPanel = document.getElementById('ab-union-panel') as HTMLDivElement;
 const abUnionPanelTitle = document.getElementById('ab-union-panel-title') as HTMLDivElement;
 const abUnionControls = document.getElementById('ab-union-controls') as HTMLDivElement;
+const coreGraphPanel = document.getElementById('core-graph-panel') as HTMLDivElement;
+const coreGraphStatus = document.getElementById('core-graph-status') as HTMLDivElement;
+const corePointControls = document.getElementById('core-point-controls') as HTMLDivElement;
+const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
+const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
+const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
+const coreSliceValueLabel = document.getElementById('core-slice-value') as HTMLSpanElement;
+const coreGraphRenderer = createCoreGraphRenderer(coreSurfaceCanvas, coreHeatmapCanvas);
 
 const triangleState: TriangleState = {
   position: { x: 0, y: 0 },
@@ -284,7 +294,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 5;
+  version: 6;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -305,15 +315,17 @@ interface ControllerSnapshot {
   coreCaseDisabledPointIds: string[];
   coreCaseIntervalPointFractions: number[];
   coreCaseAlgorithm2Diagonals: boolean;
+  coreGraphDisabledPointIds: string[];
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
-  version?: 1 | 2 | 3 | 4 | 5;
+  version?: 1 | 2 | 3 | 4 | 5 | 6;
   pointSeeds?: unknown;
   coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
   coreCaseIntervalPointFractions?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
+  coreGraphDisabledPointIds?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -337,6 +349,7 @@ function syncCanvasSizes(): void {
   setCanvasSize(mainCanvasSize);
   resizeHiDPICanvas(canvas, ctx, mainCanvasSize);
   regionRenderer.resize(getResponsiveCanvasSize(regionCanvas));
+  coreGraphRenderer.resize();
 }
 
 function formatTuple(values: number[]): string {
@@ -434,6 +447,22 @@ function coreCaseDisabledPointIdsFromLegacyEnabled(value: unknown): string[] {
   const enabledIds = new Set(value.filter((candidate): candidate is string =>
     typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
   ));
+  return CORE_CASE_POINT_IDS.filter((id) => !enabledIds.has(id));
+}
+
+function sanitizeCoreGraphPointIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const ids = value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
+  );
+  return Array.from(new Set(ids));
+}
+
+function coreGraphDisabledPointIds(): string[] {
+  const enabledIds = new Set(coreGraphRenderer.getEnabledPointIds());
   return CORE_CASE_POINT_IDS.filter((id) => !enabledIds.has(id));
 }
 
@@ -948,7 +977,8 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'ab-hull-debug' ||
     value === 'max-area' ||
     value === 'area-conj' ||
-    value === 'core-case';
+    value === 'core-case' ||
+    value === 'core-graph';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -970,7 +1000,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 5,
+    version: 6,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -995,6 +1025,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     coreCaseDisabledPointIds: coreCaseDisabledPointIds.slice(),
     coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
+    coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
   };
 }
 
@@ -1011,7 +1042,8 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     parsed.version !== 2 &&
     parsed.version !== 3 &&
     parsed.version !== 4 &&
-    parsed.version !== 5
+    parsed.version !== 5 &&
+    parsed.version !== 6
   ) {
     throw new Error('Unsupported snapshot version.');
   }
@@ -1113,9 +1145,10 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreCaseIntervalPointFractions = sanitizeCoreCaseIntervalPointFractions(
     parsed.coreCaseIntervalPointFractions,
   );
+  const parsedCoreGraphDisabledPointIds = sanitizeCoreGraphPointIds(parsed.coreGraphDisabledPointIds);
 
   return {
-    version: 5,
+    version: 6,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -1140,6 +1173,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     coreCaseDisabledPointIds: parsedCoreCaseDisabledPointIds,
     coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
+    coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
   };
 }
 
@@ -1172,6 +1206,9 @@ function loadControllerSnapshot(raw: string): void {
   coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
   coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
+  coreGraphRenderer.setEnabledPointIds(
+    CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
+  );
   coreCaseTool = 'move';
   setAbUnionTool(coreCaseState, 'move');
   ceDirectionSelect.value = ceDirection;
@@ -3165,6 +3202,30 @@ function coreCaseConstraintSummary(): string {
   return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
 }
 
+function syncCoreGraphPanel(): void {
+  const range = coreGraphRenderer.getRange();
+  const sliceK = coreGraphRenderer.getSliceK();
+  const sample = coreGraphRenderer.getSelection();
+  const enabledIds = new Set(coreGraphRenderer.getEnabledPointIds());
+  coreSliceSlider.min = range.min.toString();
+  coreSliceSlider.max = range.max.toString();
+  coreSliceSlider.step = ((range.max - range.min) / 1000).toString();
+  coreSliceSlider.value = sliceK.toString();
+  coreSliceValueLabel.textContent = sliceK.toFixed(6);
+  coreGraphStatus.textContent = sample.side === null
+    ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
+    : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
+  corePointControls.innerHTML = `
+    <span>points</span>
+    ${CORE_CASE_POINT_IDS.map((id) => `
+      <label>
+        <input type="checkbox" data-core-graph-point="${escapeHtml(id)}"${enabledIds.has(id) ? ' checked' : ''}/>
+        ${escapeHtml(id)}
+      </label>
+    `).join('')}
+  `;
+}
+
 function renderCoreCasePanel(result: CoreCaseRenderResult): void {
   const boundaryToolControls = (['move', 'add', 'delete', 'core-point'] as CoreCaseTool[]).map((tool) => `
       <button type="button" class="free-button${coreCaseTool === tool ? ' is-active' : ''}" data-core-case-tool="${tool}">${coreCaseToolText(tool)}</button>
@@ -3278,7 +3339,8 @@ function isCoverOverlayAvailable(): boolean {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'core-case';
+    shapeMode !== 'core-case' &&
+    shapeMode !== 'core-graph';
 }
 
 function syncPointToolControls(): void {
@@ -3288,7 +3350,8 @@ function syncPointToolControls(): void {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'core-case';
+    shapeMode !== 'core-case' &&
+    shapeMode !== 'core-graph';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -3313,6 +3376,8 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'Area Conj';
   } else if (shapeMode === 'core-case') {
     shapeTitle.textContent = 'Core Case';
+  } else if (shapeMode === 'core-graph') {
+    shapeTitle.textContent = 'Core f(a,b)';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -3328,11 +3393,13 @@ function syncModeButtons(): void {
   const maxAreaActive = shapeMode === 'max-area';
   const areaConjActive = shapeMode === 'area-conj';
   const coreCaseActive = shapeMode === 'core-case';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive;
+  const coreGraphActive = shapeMode === 'core-graph';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive;
   freePanel.hidden = !freeActive;
   abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !coreCaseActive;
+  coreGraphPanel.hidden = !coreGraphActive;
   abUnionPanelTitle.textContent = abHullDebugActive
     ? 'AB hull debug'
     : shapeMode === 'max-area' ? 'Max Area'
@@ -3552,6 +3619,31 @@ function render(): void {
     return;
   }
 
+  if (shapeMode === 'core-graph') {
+    const sample = coreGraphRenderer.getSelection();
+
+    ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
+    drawHexagon(ctx);
+    drawCoreCaseGraphSample(ctx, sample);
+
+    gammaValues.textContent = `a4=${sample.a.toFixed(6)}, b4=${sample.b.toFixed(6)}, a4+b4-1=${sample.strictGap.toExponential(3)}`;
+    localCBounds.textContent = 'Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2';
+    const enabledCoreGraphPoints = sample.points.filter((point) => point.enabled).map((point) => point.id).join(' ');
+    localCValues.textContent = sample.side === null
+      ? `f(a,b) unavailable: ${sample.status}`
+      : `f(a,b) = ${sample.side.toFixed(6)} from ${enabledCoreGraphPoints}`;
+    ceStatus.textContent = 'Core f(a,b): CE/g-chain inactive';
+    ceStatus.style.color = '#475569';
+    ceChainStatus.textContent = sample.domainStatus;
+    ceChainStatus.style.color = sample.domainOk ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = 'Core graph overlays: selected sample circles, points, enclosing triangle';
+    coverOverlayStatus.style.color = '#475569';
+    syncCoreGraphPanel();
+    coreGraphRenderer.render();
+    syncControllerSnapshot();
+    return;
+  }
+
   let gammas: number[];
   let maxima: number[];
   let localCs: number[];
@@ -3658,6 +3750,31 @@ function render(): void {
 cSlider.addEventListener('input', () => {
   const c = parseFloat(cSlider.value);
   cValueLabel.textContent = c.toFixed(2);
+  render();
+});
+
+coreSliceSlider.addEventListener('input', () => {
+  coreGraphRenderer.setSliceK(parseFloat(coreSliceSlider.value));
+  coreSliceValueLabel.textContent = coreGraphRenderer.getSliceK().toFixed(6);
+  render();
+});
+
+corePointControls.addEventListener('change', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.coreGraphPoint === undefined) {
+    return;
+  }
+  const requested = target.dataset.coreGraphPoint;
+  if (!CORE_CASE_POINT_IDS.includes(requested)) {
+    return;
+  }
+  const enabled = new Set(coreGraphRenderer.getEnabledPointIds());
+  if (target.checked) {
+    enabled.add(requested);
+  } else {
+    enabled.delete(requested);
+  }
+  coreGraphRenderer.setEnabledPointIds(CORE_CASE_POINT_IDS.filter((id) => enabled.has(id)));
   render();
 });
 
@@ -4576,6 +4693,9 @@ freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () =>
   if (freeState.tool !== 'sample') {
     autoPlaceAllFreeVd0FromControls();
   }
+  render();
+});
+coreGraphRenderer.setOnSelectionChange(() => {
   render();
 });
 window.addEventListener('resize', () => {

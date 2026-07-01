@@ -18,7 +18,8 @@ export type ShapeMode =
   | 'ab-hull-debug'
   | 'max-area'
   | 'area-conj'
-  | 'core-case';
+  | 'core-case'
+  | 'core-graph';
 
 export type InteractionState =
   | { kind: 'idle' }

@@ -1,5 +1,5 @@
 import type { Point, TriangleState } from './types';
-import { mathToCanvas, scaleToCanvas } from './coords';
+import { canvasToMath, config, mathToCanvas, scaleToCanvas } from './coords';
 import { fitTriangle, type CoverTriangle } from './cover';
 import { HEXAGON_VERTICES } from './hexagon';
 import {
@@ -25,7 +25,7 @@ const DEFAULT_CORE_CASE_OPTIONS = {
   algorithm2Diagonals: false,
 } as const;
 
-interface CircleGeometry {
+export interface CircleGeometry {
   id: 'C2' | 'C5';
   center: Point;
 }
@@ -84,6 +84,20 @@ export interface CoreCaseRenderResult {
   points: CoreCasePoint[];
   enabledPointCount: number;
   triangle: CoverTriangle | null;
+  strictGap: number;
+  status: string;
+}
+
+export interface CoreCaseGraphSample {
+  a: number;
+  b: number;
+  domainOk: boolean;
+  domainStatus: string;
+  circles: CircleGeometry[];
+  points: CoreCasePoint[];
+  enabledPointCount: number;
+  triangle: CoverTriangle | null;
+  side: number | null;
   strictGap: number;
   status: string;
 }
@@ -489,6 +503,22 @@ function v4CirclePoint(circle: CircleGeometry, a4: number, b4: number): Point | 
   return closestCurvePointToV4(boundaryIntersectionsWithCircle(circle, a4, b4));
 }
 
+function t4RegionNonempty(a4: number, b4: number): boolean {
+  return Number.isFinite(a4) &&
+    Number.isFinite(b4) &&
+    a4 >= -1e-9 &&
+    b4 >= -1e-9 &&
+    a4 * a4 + a4 * b4 + b4 * b4 <= 1 + 1e-9;
+}
+
+function p3FallbackPoint(a4: number, b4: number): Point | null {
+  return t4RegionNonempty(a4, b4) ? pointOnEdge(3, 1 - a4) : null;
+}
+
+function p5FallbackPoint(a4: number, b4: number): Point | null {
+  return t4RegionNonempty(a4, b4) ? pointOnEdge(4, b4) : null;
+}
+
 function diagonalRedWitness(index: number, aValues: number[], bValues: number[]): Point | null {
   const pointAt = (t: number) => scale(t, HEXAGON_VERTICES[index]);
   const red = (point: Point) => isRedPoint(point, aValues, bValues);
@@ -658,11 +688,73 @@ function drawOverlay(ctx: CanvasRenderingContext2D, circles: CircleGeometry[], p
   drawCoreCasePoints(ctx, points);
 }
 
+function inLocalHexFootprint(u: number, v: number): boolean {
+  return u >= -EDGE_AXIS_EPS &&
+    u <= 2 + EDGE_AXIS_EPS &&
+    v >= -EDGE_AXIS_EPS &&
+    v <= 2 + EDGE_AXIS_EPS &&
+    Math.abs(u - v) <= 1 + EDGE_AXIS_EPS;
+}
+
+function drawCoreGraphT4Region(ctx: CanvasRenderingContext2D, a4: number, b4: number): void {
+  const step = Math.max(1, Math.round(config.canvasSize / 300));
+  ctx.save();
+  ctx.fillStyle = 'rgba(132, 204, 22, 0.22)';
+  for (let y = 0; y < config.canvasSize; y += step) {
+    for (let x = 0; x < config.canvasSize; x += step) {
+      const point = canvasToMath({ x: x + step / 2, y: y + step / 2 });
+      const local = localCoordinates(4, point);
+      if (inLocalHexFootprint(local.u, local.v) && containsAbUnionLocal(local.u, local.v, a4, b4)) {
+        ctx.fillRect(x, y, step, step);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawCoreGraphEdgeMarker(
+  ctx: CanvasRenderingContext2D,
+  edgeIndex: number,
+  value: number,
+  label: string,
+  color: string,
+): void {
+  const point = pointOnEdge(edgeIndex, value);
+  const canvasPoint = mathToCanvas(point);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(canvasPoint.x, canvasPoint.y, 7.5, 0, 2 * Math.PI);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, canvasPoint.x + 8, canvasPoint.y - 8);
+  ctx.restore();
+}
+
+function drawCoreGraphEdgeMarkers(ctx: CanvasRenderingContext2D, a4: number, b4: number): void {
+  drawCoreGraphEdgeMarker(ctx, 3, 1 - a4, 'a4', '#d97706');
+  drawCoreGraphEdgeMarker(ctx, 4, b4, 'b4', '#2563eb');
+}
+
+export function drawCoreCaseGraphSample(ctx: CanvasRenderingContext2D, sample: CoreCaseGraphSample): void {
+  if (!sample.domainOk) return;
+  drawCoreGraphT4Region(ctx, sample.a, sample.b);
+  drawOverlay(ctx, sample.circles, sample.points, sample.triangle);
+  drawCoreGraphEdgeMarkers(ctx, sample.a, sample.b);
+}
+
 const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
   {
     id: 'P3',
     label: 'R4/C2',
-    build: ({ circles, aValues, bValues }) => v4CirclePoint(circles[0], aValues[4], bValues[4]),
+    build: ({ circles, aValues, bValues }) =>
+      v4CirclePoint(circles[0], aValues[4], bValues[4]) ?? p3FallbackPoint(aValues[4], bValues[4]),
   },
   {
     id: 'P4',
@@ -672,7 +764,8 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
   {
     id: 'P5',
     label: 'R4/C5',
-    build: ({ circles, aValues, bValues }) => v4CirclePoint(circles[1], aValues[4], bValues[4]),
+    build: ({ circles, aValues, bValues }) =>
+      v4CirclePoint(circles[1], aValues[4], bValues[4]) ?? p5FallbackPoint(aValues[4], bValues[4]),
   },
   {
     id: 'D0',
@@ -701,6 +794,89 @@ export const CORE_CASE_POINT_IDS = CORE_CASE_POINT_DEFINITIONS.map((definition) 
 
 export function isCoreCasePointId(value: string): boolean {
   return CORE_CASE_POINT_IDS.includes(value) || /^I[0-5]$/.test(value);
+}
+
+function coreCaseGraphDisabledPointSet(enabledPointIds: readonly string[] | undefined): ReadonlySet<string> | null {
+  if (!enabledPointIds) return null;
+  const enabled = new Set(enabledPointIds);
+  return new Set(CORE_CASE_POINT_IDS.filter((id) => !enabled.has(id)));
+}
+
+function coreCaseGraphDomainIssue(a: number, b: number): string | null {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) {
+    return 'a,b must be finite';
+  }
+  if (a < 0 || a > 1 || b < 0 || b > 1) {
+    return 'outside 0<=a,b<=1';
+  }
+  if (a + b <= 1) {
+    return 'outside a+b>1';
+  }
+  if (a * a + a * b + b * b > 1 + 1e-12) {
+    return 'outside a^2+ab+b^2<=1';
+  }
+  return null;
+}
+
+export function evaluateCoreCaseGraph(
+  a: number,
+  b: number,
+  enabledPointIds?: readonly string[],
+): CoreCaseGraphSample {
+  const domainIssue = coreCaseGraphDomainIssue(a, b);
+  if (domainIssue) {
+    return {
+      a,
+      b,
+      domainOk: false,
+      domainStatus: domainIssue,
+      circles: [],
+      points: [],
+      enabledPointCount: 0,
+      triangle: null,
+      side: null,
+      strictGap: a + b - 1,
+      status: domainIssue,
+    };
+  }
+
+  const aValues = [0, 0, 0, 0, a, 0];
+  const bValues = [0, 0, 0, 0, b, 0];
+  const circles = circleGeometries([0, 0, 1 - a, 0, 0, b]);
+  const points = buildCoreCasePoints(
+    {
+      circles,
+      aValues,
+      bValues,
+      algorithm2Diagonals: true,
+      algorithm2P: 1 - b,
+      algorithm2Q: 1 - a,
+    },
+    coreCaseGraphDisabledPointSet(enabledPointIds),
+  );
+  const enabledPoints = points.filter((item) => item.enabled);
+  const concretePoints = enabledPoints.flatMap((item) => item.point ? [item.point] : []);
+  const triangle = enabledPoints.length > 0 && concretePoints.length === enabledPoints.length
+    ? fitTriangle('Core f(a,b)', concretePoints, '#eab308')
+    : null;
+  const missing = enabledPoints.filter((item) => item.point === null).map((item) => item.id);
+  const status = enabledPoints.length === 0
+    ? 'no points selected'
+    : missing.length === 0 ? 'ready' : `missing ${missing.join(', ')}`;
+
+  return {
+    a,
+    b,
+    domainOk: true,
+    domainStatus: 'inside domain',
+    circles,
+    points,
+    enabledPointCount: enabledPoints.length,
+    triangle,
+    side: triangle?.side ?? null,
+    strictGap: a + b - 1,
+    status,
+  };
 }
 
 function disabledPointSet(disabledPointIds: CoreCaseRenderOptions['disabledPointIds']): ReadonlySet<string> | null {
