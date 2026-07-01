@@ -5,15 +5,34 @@ import {
   type CoreCaseGraphSample,
 } from './coreCase';
 
-const A_SAMPLE_COUNT = 128;
-const S_SAMPLE_COUNT = 96;
-const BOUNDARY_BAND_COUNT = 64;
 const BOUNDARY_BAND_WIDTH = 0.12;
 const DOMAIN_EPS = 1e-5;
 const SURFACE_SCALE = 3.2;
 const SURFACE_HEIGHT = 1.35;
 const HEATMAP_PADDING = 44;
 const FONT_SIZE = 12;
+const MINIMUM_CURVE_COLOR = '#d946ef';
+const MINIMUM_CURVE_Z_OFFSET = 0.035;
+
+export const CORE_GRAPH_SAMPLE_RATES = ['high', 'medium', 'low'] as const;
+export type CoreGraphSampleRate = typeof CORE_GRAPH_SAMPLE_RATES[number];
+
+interface SampleProfile {
+  aCount: number;
+  sCount: number;
+  boundaryBandCount: number;
+}
+
+interface GridSamples {
+  a: number[];
+  s: number[];
+}
+
+const SAMPLE_PROFILES: Record<CoreGraphSampleRate, SampleProfile> = {
+  high: { aCount: 128, sCount: 96, boundaryBandCount: 64 },
+  medium: { aCount: 64, sCount: 48, boundaryBandCount: 32 },
+  low: { aCount: 32, sCount: 24, boundaryBandCount: 16 },
+};
 
 interface GridNode {
   a: number;
@@ -23,7 +42,9 @@ interface GridNode {
 }
 
 interface GridData {
+  samples: GridSamples;
   nodes: GridNode[];
+  minimumCurve: Array<GridNode | null>;
   minSide: number;
   maxSide: number;
 }
@@ -47,6 +68,8 @@ export interface CoreGraphRenderer {
   setSliceK(value: number): void;
   getSliceK(): number;
   getRange(): { min: number; max: number };
+  setSampleRate(value: CoreGraphSampleRate): void;
+  getSampleRate(): CoreGraphSampleRate;
   setEnabledPointIds(ids: readonly string[]): void;
   getEnabledPointIds(): string[];
   setOnSelectionChange(callback: (sample: CoreCaseGraphSample) => void): void;
@@ -114,21 +137,26 @@ function uniqueSortedSamples(values: number[]): number[] {
     .filter((value, index, array) => index === 0 || Math.abs(value - array[index - 1]) > 1e-9);
 }
 
-function buildASamples(): number[] {
-  return Array.from({ length: A_SAMPLE_COUNT + 1 }, (_, index) => cosine01(index, A_SAMPLE_COUNT));
+function buildASamples(count: number): number[] {
+  return Array.from({ length: count + 1 }, (_, index) => cosine01(index, count));
 }
 
-function buildSSamples(): number[] {
-  const samples = Array.from({ length: S_SAMPLE_COUNT + 1 }, (_, index) => cosine01(index, S_SAMPLE_COUNT));
-  for (let index = 1; index <= BOUNDARY_BAND_COUNT; index++) {
-    const t = BOUNDARY_BAND_WIDTH * (index / BOUNDARY_BAND_COUNT) ** 2;
+function buildSSamples(count: number, boundaryBandCount: number): number[] {
+  const samples = Array.from({ length: count + 1 }, (_, index) => cosine01(index, count));
+  for (let index = 1; index <= boundaryBandCount; index++) {
+    const t = BOUNDARY_BAND_WIDTH * (index / boundaryBandCount) ** 2;
     samples.push(t, 1 - t);
   }
   return uniqueSortedSamples(samples);
 }
 
-const A_SAMPLES = buildASamples();
-const S_SAMPLES = buildSSamples();
+function buildSamples(sampleRate: CoreGraphSampleRate): GridSamples {
+  const profile = SAMPLE_PROFILES[sampleRate];
+  return {
+    a: buildASamples(profile.aCount),
+    s: buildSSamples(profile.sCount, profile.boundaryBandCount),
+  };
+}
 
 function upperBoundary(a: number): number {
   return (-a + Math.sqrt(Math.max(0, 4 - 3 * a * a))) / 2;
@@ -147,13 +175,14 @@ function sampleDomainNode(a: number, s: number): { a: number; b: number; valid: 
   };
 }
 
-function buildGrid(enabledPointIds: readonly string[]): GridData {
+function buildGrid(enabledPointIds: readonly string[], sampleRate: CoreGraphSampleRate): GridData {
+  const samples = buildSamples(sampleRate);
   const nodes: GridNode[] = [];
   let minSide = Number.POSITIVE_INFINITY;
   let maxSide = Number.NEGATIVE_INFINITY;
 
-  for (const s of S_SAMPLES) {
-    for (const a of A_SAMPLES) {
+  for (const s of samples.s) {
+    for (const a of samples.a) {
       const domain = sampleDomainNode(a, s);
       const sample = domain.valid
         ? evaluateCoreCaseGraph(domain.a, domain.b, enabledPointIds)
@@ -176,11 +205,39 @@ function buildGrid(enabledPointIds: readonly string[]): GridData {
     node.t = node.side === null ? 0 : (node.side - minSide) / (maxSide - minSide);
   }
 
-  return { nodes, minSide, maxSide };
+  return {
+    samples,
+    nodes,
+    minimumCurve: buildMinimumCurve(nodes, samples),
+    minSide,
+    maxSide,
+  };
 }
 
-function gridIndex(i: number, j: number): number {
-  return j * A_SAMPLES.length + i;
+function gridIndex(i: number, j: number, samples: GridSamples): number {
+  return j * samples.a.length + i;
+}
+
+function buildMinimumCurve(nodes: readonly GridNode[], samples: GridSamples): Array<GridNode | null> {
+  return samples.a.map((_, i) => {
+    let best: GridNode | null = null;
+    for (let j = 1; j < samples.s.length - 1; j++) {
+      const previous = nodes[gridIndex(i, j - 1, samples)];
+      const node = nodes[gridIndex(i, j, samples)];
+      const next = nodes[gridIndex(i, j + 1, samples)];
+      if (!finiteSide(previous.side) || !finiteSide(node.side) || !finiteSide(next.side)) {
+        continue;
+      }
+      if (
+        node.side <= previous.side &&
+        node.side <= next.side &&
+        (best === null || node.side < (best.side ?? Number.POSITIVE_INFINITY))
+      ) {
+        best = node;
+      }
+    }
+    return best;
+  });
 }
 
 function surfacePosition(node: GridNode): [number, number, number] {
@@ -191,28 +248,28 @@ function surfacePosition(node: GridNode): [number, number, number] {
   ];
 }
 
-function makeSurfaceGeometry(nodes: GridNode[]) {
+function makeSurfaceGeometry(grid: GridData) {
   const positions: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
 
-  for (const node of nodes) {
+  for (const node of grid.nodes) {
     positions.push(...surfacePosition(node));
     const [r, g, b] = colorStops(node.t);
     colors.push(r / 255, g / 255, b / 255);
   }
 
-  for (let j = 0; j < S_SAMPLES.length - 1; j++) {
-    for (let i = 0; i < A_SAMPLES.length - 1; i++) {
-      const bottomLeft = gridIndex(i, j);
-      const bottomRight = gridIndex(i + 1, j);
-      const topLeft = gridIndex(i, j + 1);
-      const topRight = gridIndex(i + 1, j + 1);
+  for (let j = 0; j < grid.samples.s.length - 1; j++) {
+    for (let i = 0; i < grid.samples.a.length - 1; i++) {
+      const bottomLeft = gridIndex(i, j, grid.samples);
+      const bottomRight = gridIndex(i + 1, j, grid.samples);
+      const topLeft = gridIndex(i, j + 1, grid.samples);
+      const topRight = gridIndex(i + 1, j + 1, grid.samples);
       if (
-        nodes[bottomLeft].side === null ||
-        nodes[bottomRight].side === null ||
-        nodes[topLeft].side === null ||
-        nodes[topRight].side === null
+        grid.nodes[bottomLeft].side === null ||
+        grid.nodes[bottomRight].side === null ||
+        grid.nodes[topLeft].side === null ||
+        grid.nodes[topRight].side === null
       ) {
         continue;
       }
@@ -225,6 +282,29 @@ function makeSurfaceGeometry(nodes: GridNode[]) {
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+  return geometry;
+}
+
+function makeMinimumCurveGeometry(nodes: readonly (GridNode | null)[]) {
+  const positions: number[] = [];
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const start = nodes[i];
+    const end = nodes[i + 1];
+    if (start === null || end === null) continue;
+    const startPosition = surfacePosition(start);
+    const endPosition = surfacePosition(end);
+    positions.push(
+      startPosition[0],
+      startPosition[1],
+      startPosition[2] + MINIMUM_CURVE_Z_OFFSET,
+      endPosition[0],
+      endPosition[1],
+      endPosition[2] + MINIMUM_CURVE_Z_OFFSET,
+    );
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   return geometry;
 }
 
@@ -266,7 +346,8 @@ export function createCoreGraphRenderer(
   const heatmapContext: CanvasRenderingContext2D = rawHeatmapContext;
 
   let enabledPointIds = CORE_CASE_POINT_IDS.slice();
-  let grid = buildGrid(enabledPointIds);
+  let sampleRate: CoreGraphSampleRate = 'high';
+  let grid = buildGrid(enabledPointIds, sampleRate);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
 
@@ -280,7 +361,7 @@ export function createCoreGraphRenderer(
   webgl.setClearColor('#ffffff', 1);
 
   const surface = new THREE.Mesh(
-    makeSurfaceGeometry(grid.nodes),
+    makeSurfaceGeometry(grid),
     new THREE.MeshStandardMaterial({
       side: THREE.DoubleSide,
       vertexColors: true,
@@ -289,6 +370,13 @@ export function createCoreGraphRenderer(
     }),
   );
   scene.add(surface);
+
+  const minimumCurve = new THREE.LineSegments(
+    makeMinimumCurveGeometry(grid.minimumCurve),
+    new THREE.LineBasicMaterial({ color: MINIMUM_CURVE_COLOR }),
+  );
+  scene.add(minimumCurve);
+
   scene.add(makeBaseGrid());
   scene.add(new THREE.AmbientLight('#ffffff', 1.9));
   const light = new THREE.DirectionalLight('#ffffff', 1.4);
@@ -359,7 +447,7 @@ export function createCoreGraphRenderer(
   }
 
   function getNode(i: number, j: number): GridNode {
-    return grid.nodes[gridIndex(i, j)];
+    return grid.nodes[gridIndex(i, j, grid.samples)];
   }
 
   function heatmapPlotRect(): PlotRect {
@@ -464,8 +552,8 @@ export function createCoreGraphRenderer(
 
   function drawHeatmapCells(): void {
     const ctx = heatmapContext;
-    for (let j = 0; j < S_SAMPLES.length - 1; j++) {
-      for (let i = 0; i < A_SAMPLES.length - 1; i++) {
+    for (let j = 0; j < grid.samples.s.length - 1; j++) {
+      for (let i = 0; i < grid.samples.a.length - 1; i++) {
         const corners = [
           getNode(i, j),
           getNode(i + 1, j),
@@ -505,8 +593,8 @@ export function createCoreGraphRenderer(
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
 
-    for (let j = 0; j < S_SAMPLES.length - 1; j++) {
-      for (let i = 0; i < A_SAMPLES.length - 1; i++) {
+    for (let j = 0; j < grid.samples.s.length - 1; j++) {
+      for (let i = 0; i < grid.samples.a.length - 1; i++) {
         const corners = [
           getNode(i, j),
           getNode(i + 1, j),
@@ -577,6 +665,38 @@ export function createCoreGraphRenderer(
     ctx.restore();
   }
 
+  function drawMinimumCurve(): void {
+    const ctx = heatmapContext;
+
+    function strokeCurve(color: string, lineWidth: number): void {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      let drawing = false;
+      for (const node of grid.minimumCurve) {
+        if (node === null) {
+          drawing = false;
+          continue;
+        }
+        const point = domainToHeatmap(node.a, node.b);
+        if (!drawing) {
+          ctx.moveTo(point.x, point.y);
+          drawing = true;
+        } else {
+          ctx.lineTo(point.x, point.y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    ctx.save();
+    strokeCurve('rgba(255, 255, 255, 0.9)', 5);
+    strokeCurve(MINIMUM_CURVE_COLOR, 2.4);
+    ctx.restore();
+  }
+
   function drawSelectionMarker(): void {
     const ctx = heatmapContext;
     const point = domainToHeatmap(selection.a, selection.b);
@@ -604,6 +724,7 @@ export function createCoreGraphRenderer(
       drawContour(grid.minSide + (grid.maxSide - grid.minSide) * fraction, 'rgba(255, 255, 255, 0.62)', 1.2);
     }
     drawContour(sliceK, '#111827', 2.2);
+    drawMinimumCurve();
     drawSelectionMarker();
   }
 
@@ -638,10 +759,13 @@ export function createCoreGraphRenderer(
   }
 
   function rebuildGrid(): void {
-    grid = buildGrid(enabledPointIds);
-    const nextGeometry = makeSurfaceGeometry(grid.nodes);
+    grid = buildGrid(enabledPointIds, sampleRate);
+    const nextGeometry = makeSurfaceGeometry(grid);
     surface.geometry.dispose();
     surface.geometry = nextGeometry;
+    const nextCurveGeometry = makeMinimumCurveGeometry(grid.minimumCurve);
+    minimumCurve.geometry.dispose();
+    minimumCurve.geometry = nextCurveGeometry;
     sliceK = clamp(sliceK, grid.minSide, grid.maxSide);
     selection = evaluateCoreCaseGraph(selection.a, selection.b, enabledPointIds);
     if (!selection.domainOk) {
@@ -749,6 +873,14 @@ export function createCoreGraphRenderer(
     },
     getRange(): { min: number; max: number } {
       return { min: grid.minSide, max: grid.maxSide };
+    },
+    setSampleRate(value: CoreGraphSampleRate): void {
+      if (value === sampleRate) return;
+      sampleRate = value;
+      rebuildGrid();
+    },
+    getSampleRate(): CoreGraphSampleRate {
+      return sampleRate;
     },
     setEnabledPointIds(ids: readonly string[]): void {
       const normalized = normalizeEnabledPointIds(ids);

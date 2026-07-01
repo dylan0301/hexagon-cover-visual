@@ -26,3 +26,12 @@ make it much denser sampling around the boundary
 
 both in core case and core f(a,b) mode,
 color other color which of the points lie on the minimal triangle.
+
+in the core f(a,b) mode, there is local minimum points.
+draw that curve.
+
+make it able to change sample rate in the core f(a,b) mode
+high medium low. high is current.
+
+just reject all old snapshots
+

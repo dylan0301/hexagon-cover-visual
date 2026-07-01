@@ -150,7 +150,11 @@ import {
   type CoreCaseOptions,
   type CoreCaseRenderResult,
 } from './coreCase';
-import { createCoreGraphRenderer } from './coreGraph';
+import {
+  CORE_GRAPH_SAMPLE_RATES,
+  createCoreGraphRenderer,
+  type CoreGraphSampleRate,
+} from './coreGraph';
 import {
   areaConjRequiredPoints,
   computeAreaConjResult,
@@ -215,6 +219,7 @@ const abUnionControls = document.getElementById('ab-union-controls') as HTMLDivE
 const coreGraphPanel = document.getElementById('core-graph-panel') as HTMLDivElement;
 const coreGraphStatus = document.getElementById('core-graph-status') as HTMLDivElement;
 const corePointControls = document.getElementById('core-point-controls') as HTMLDivElement;
+const coreSampleRateSelect = document.getElementById('core-sample-rate-select') as HTMLSelectElement;
 const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
 const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
 const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
@@ -294,7 +299,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 6;
+  version: 7;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -316,16 +321,18 @@ interface ControllerSnapshot {
   coreCaseIntervalPointFractions: number[];
   coreCaseAlgorithm2Diagonals: boolean;
   coreGraphDisabledPointIds: string[];
+  coreGraphSampleRate: CoreGraphSampleRate;
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
-  version?: 1 | 2 | 3 | 4 | 5 | 6;
+  version?: 7;
   pointSeeds?: unknown;
   coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
   coreCaseIntervalPointFractions?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
   coreGraphDisabledPointIds?: unknown;
+  coreGraphSampleRate?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -459,6 +466,10 @@ function sanitizeCoreGraphPointIds(value: unknown): string[] {
     typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
   );
   return Array.from(new Set(ids));
+}
+
+function isCoreGraphSampleRate(value: unknown): value is CoreGraphSampleRate {
+  return typeof value === 'string' && CORE_GRAPH_SAMPLE_RATES.includes(value as CoreGraphSampleRate);
 }
 
 function coreGraphDisabledPointIds(): string[] {
@@ -1000,7 +1011,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 6,
+    version: 7,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -1026,6 +1037,7 @@ function getControllerSnapshot(): ControllerSnapshot {
     coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
     coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
+    coreGraphSampleRate: coreGraphRenderer.getSampleRate(),
   };
 }
 
@@ -1037,15 +1049,8 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (
-    parsed.version !== 1 &&
-    parsed.version !== 2 &&
-    parsed.version !== 3 &&
-    parsed.version !== 4 &&
-    parsed.version !== 5 &&
-    parsed.version !== 6
-  ) {
-    throw new Error('Unsupported snapshot version.');
+  if (parsed.version !== 7) {
+    throw new Error('Unsupported snapshot version. Current version is 7.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
     throw new Error('Invalid shapeMode.');
@@ -1129,6 +1134,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   if ('coreCaseAlgorithm2Diagonals' in parsed && typeof parsed.coreCaseAlgorithm2Diagonals !== 'boolean') {
     throw new Error('Invalid coreCaseAlgorithm2Diagonals.');
   }
+  if (!isCoreGraphSampleRate(parsed.coreGraphSampleRate)) {
+    throw new Error('Invalid coreGraphSampleRate.');
+  }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
@@ -1148,7 +1156,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreGraphDisabledPointIds = sanitizeCoreGraphPointIds(parsed.coreGraphDisabledPointIds);
 
   return {
-    version: 6,
+    version: 7,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -1174,6 +1182,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
     coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
+    coreGraphSampleRate: parsed.coreGraphSampleRate,
   };
 }
 
@@ -1206,6 +1215,7 @@ function loadControllerSnapshot(raw: string): void {
   coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
   coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
+  coreGraphRenderer.setSampleRate(snapshot.coreGraphSampleRate);
   coreGraphRenderer.setEnabledPointIds(
     CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
   );
@@ -3212,6 +3222,7 @@ function syncCoreGraphPanel(): void {
   coreSliceSlider.step = ((range.max - range.min) / 1000).toString();
   coreSliceSlider.value = sliceK.toString();
   coreSliceValueLabel.textContent = sliceK.toFixed(6);
+  coreSampleRateSelect.value = coreGraphRenderer.getSampleRate();
   coreGraphStatus.textContent = sample.side === null
     ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
     : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
@@ -3756,6 +3767,15 @@ cSlider.addEventListener('input', () => {
 coreSliceSlider.addEventListener('input', () => {
   coreGraphRenderer.setSliceK(parseFloat(coreSliceSlider.value));
   coreSliceValueLabel.textContent = coreGraphRenderer.getSliceK().toFixed(6);
+  render();
+});
+
+coreSampleRateSelect.addEventListener('change', () => {
+  const requested = coreSampleRateSelect.value;
+  if (!isCoreGraphSampleRate(requested)) {
+    return;
+  }
+  coreGraphRenderer.setSampleRate(requested);
   render();
 });
 

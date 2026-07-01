@@ -109,6 +109,18 @@ canvas {
   white-space: nowrap;
 }
 
+#core-sample-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+#core-sample-row select {
+  font: inherit;
+}
+
 #core-heatmap-canvas {
   aspect-ratio: 1;
 }
