@@ -13,8 +13,6 @@ const HEATMAP_PADDING = 44;
 const FONT_SIZE = 12;
 const MINIMUM_CURVE_COLOR = '#d946ef';
 const MINIMUM_CURVE_Z_OFFSET = 0.035;
-const SPECIAL_MINIMUM_CURVE_COLOR = '#0284c7';
-const SPECIAL_MINIMUM_CURVE_Z_OFFSET = 0.08;
 const SPECIAL_CURVE_NEIGHBORHOOD_B_WIDTH = 0.03;
 const SPECIAL_CURVE_DENSE_B_OFFSETS = [-0.03, -0.02, -0.01, 0, 0.01, 0.02, 0.03];
 
@@ -291,7 +289,8 @@ function interpolateCurveB(curve: MinimumCurve, a: number): number | null {
   return previous !== null && Math.abs(previous.a - a) < 1e-12 ? previous.b : null;
 }
 
-function isInSpecialCurveNeighborhood(a: number, b: number, specialCurve: MinimumCurve): boolean {
+function isInSpecialCurveNeighborhood(a: number, b: number, specialCurve: MinimumCurve | null): boolean {
+  if (specialCurve === null) return false;
   const curveB = interpolateCurveB(specialCurve, a);
   return curveB !== null && Math.abs(b - curveB) <= SPECIAL_CURVE_NEIGHBORHOOD_B_WIDTH;
 }
@@ -305,7 +304,7 @@ function cellCenter(nodes: readonly GridNode[]): { a: number; b: number } {
 
 function isCellVisible(
   nodes: readonly GridNode[],
-  specialCurve: MinimumCurve,
+  specialCurve: MinimumCurve | null,
   specialCurveNeighborhoodOnly: boolean,
 ): boolean {
   if (!specialCurveNeighborhoodOnly) return true;
@@ -323,7 +322,7 @@ function surfacePosition(node: GridNode): [number, number, number] {
 
 function makeSurfaceGeometry(
   grid: GridData,
-  specialCurve: MinimumCurve,
+  specialCurve: MinimumCurve | null,
   specialCurveNeighborhoodOnly: boolean,
 ) {
   const positions: number[] = [];
@@ -430,11 +429,10 @@ export function createCoreGraphRenderer(
   const heatmapContext: CanvasRenderingContext2D = rawHeatmapContext;
 
   let enabledPointIds = CORE_CASE_POINT_IDS.slice();
-  let sampleRate: CoreGraphSampleRate = 'high';
+  let sampleRate: CoreGraphSampleRate = 'low';
   let denseSpecialCurveSampling = false;
   let specialCurveNeighborhoodOnly = false;
-  const specialGrid = buildGrid(CORE_CASE_POINT_IDS, 'high');
-  const specialCurve = specialGrid.minimumCurve;
+  let specialCurve: MinimumCurve | null = null;
   let grid = buildGrid(enabledPointIds, sampleRate);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
@@ -449,7 +447,7 @@ export function createCoreGraphRenderer(
   webgl.setClearColor('#ffffff', 1);
 
   const surface = new THREE.Mesh(
-    makeSurfaceGeometry(grid, specialCurve, specialCurveNeighborhoodOnly),
+    makeSurfaceGeometry(grid, null, specialCurveNeighborhoodOnly),
     new THREE.MeshStandardMaterial({
       side: THREE.DoubleSide,
       vertexColors: true,
@@ -464,12 +462,6 @@ export function createCoreGraphRenderer(
     new THREE.LineBasicMaterial({ color: MINIMUM_CURVE_COLOR }),
   );
   scene.add(minimumCurve);
-
-  const specialMinimumCurve = new THREE.LineSegments(
-    makeMinimumCurveGeometry(specialCurve, SPECIAL_MINIMUM_CURVE_Z_OFFSET),
-    new THREE.LineBasicMaterial({ color: SPECIAL_MINIMUM_CURVE_COLOR }),
-  );
-  scene.add(specialMinimumCurve);
 
   scene.add(makeBaseGrid());
   scene.add(new THREE.AmbientLight('#ffffff', 1.9));
@@ -511,8 +503,19 @@ export function createCoreGraphRenderer(
     selection = nearestValidSelection() ?? selection;
   }
 
+  function getSpecialCurve(): MinimumCurve {
+    if (specialCurve === null) {
+      specialCurve = buildGrid(CORE_CASE_POINT_IDS, 'high').minimumCurve;
+    }
+    return specialCurve;
+  }
+
+  function specialCurveForNeighborhood(): MinimumCurve | null {
+    return specialCurveNeighborhoodOnly ? getSpecialCurve() : null;
+  }
+
   function refreshSurfaceGeometry(): void {
-    const nextGeometry = makeSurfaceGeometry(grid, specialCurve, specialCurveNeighborhoodOnly);
+    const nextGeometry = makeSurfaceGeometry(grid, specialCurveForNeighborhood(), specialCurveNeighborhoodOnly);
     surface.geometry.dispose();
     surface.geometry = nextGeometry;
   }
@@ -537,7 +540,7 @@ export function createCoreGraphRenderer(
       !finiteSide(selection.side) ||
       (
         specialCurveNeighborhoodOnly &&
-        !isInSpecialCurveNeighborhood(selection.a, selection.b, specialCurve)
+        !isInSpecialCurveNeighborhood(selection.a, selection.b, getSpecialCurve())
       )
     ) {
       marker.visible = false;
@@ -658,6 +661,7 @@ export function createCoreGraphRenderer(
 
   function drawHeatmapCells(): void {
     const ctx = heatmapContext;
+    const neighborhoodCurve = specialCurveForNeighborhood();
     for (let j = 0; j < grid.samples.s.length - 1; j++) {
       for (let i = 0; i < grid.samples.a.length - 1; i++) {
         const corners = [
@@ -669,7 +673,7 @@ export function createCoreGraphRenderer(
         if (corners.some((node) => node.side === null)) {
           continue;
         }
-        if (!isCellVisible(corners, specialCurve, specialCurveNeighborhoodOnly)) {
+        if (!isCellVisible(corners, neighborhoodCurve, specialCurveNeighborhoodOnly)) {
           continue;
         }
         const t = corners.reduce((sum, node) => sum + node.t, 0) / corners.length;
@@ -698,6 +702,7 @@ export function createCoreGraphRenderer(
 
   function drawContour(level: number, color: string, lineWidth: number): void {
     const ctx = heatmapContext;
+    const neighborhoodCurve = specialCurveForNeighborhood();
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
@@ -713,7 +718,7 @@ export function createCoreGraphRenderer(
         if (corners.some((node) => node.side === null)) {
           continue;
         }
-        if (!isCellVisible(corners, specialCurve, specialCurveNeighborhoodOnly)) {
+        if (!isCellVisible(corners, neighborhoodCurve, specialCurveNeighborhoodOnly)) {
           continue;
         }
 
@@ -811,13 +816,12 @@ export function createCoreGraphRenderer(
 
   function drawMinimumCurves(): void {
     drawCurve(grid.minimumCurve, MINIMUM_CURVE_COLOR, 2.4, 5);
-    drawCurve(specialCurve, SPECIAL_MINIMUM_CURVE_COLOR, 2.8, 6);
   }
 
   function drawSelectionMarker(): void {
     if (
       specialCurveNeighborhoodOnly &&
-      !isInSpecialCurveNeighborhood(selection.a, selection.b, specialCurve)
+      !isInSpecialCurveNeighborhood(selection.a, selection.b, getSpecialCurve())
     ) {
       return;
     }
@@ -882,7 +886,7 @@ export function createCoreGraphRenderer(
   }
 
   function rebuildGrid(): void {
-    grid = buildGrid(enabledPointIds, sampleRate, denseSpecialCurveSampling ? specialCurve : null);
+    grid = buildGrid(enabledPointIds, sampleRate, denseSpecialCurveSampling ? getSpecialCurve() : null);
     refreshSurfaceGeometry();
     const nextCurveGeometry = makeMinimumCurveGeometry(grid.minimumCurve, MINIMUM_CURVE_Z_OFFSET);
     minimumCurve.geometry.dispose();
