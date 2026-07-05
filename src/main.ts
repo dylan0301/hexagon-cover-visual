@@ -223,6 +223,7 @@ const coreSampleRateSelect = document.getElementById('core-sample-rate-select') 
 const coreDenseSpecialCurveToggle = document.getElementById('core-dense-special-curve-toggle') as HTMLInputElement;
 const coreSpecialNeighborhoodToggle = document.getElementById('core-special-neighborhood-toggle') as HTMLInputElement;
 const coreStrictTwoLineToggle = document.getElementById('core-strict-two-line-toggle') as HTMLInputElement;
+const coreRelaxedPToggle = document.getElementById('core-relaxed-p-toggle') as HTMLInputElement;
 const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
 const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
 const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
@@ -270,6 +271,7 @@ let coreCaseOptions: CoreCaseOptions = {
   hardLimitDrag: false,
   algorithm2Diagonals: false,
   strictTwoLineSuperset: false,
+  relaxedPPoints: false,
 };
 let coreCaseTool: CoreCaseTool = 'move';
 let coreCaseDisabledPointIds: string[] = [];
@@ -325,11 +327,13 @@ interface ControllerSnapshot {
   coreCaseIntervalPointFractions: number[];
   coreCaseAlgorithm2Diagonals: boolean;
   coreCaseStrictTwoLineSuperset: boolean;
+  coreCaseRelaxedPPoints: boolean;
   coreGraphDisabledPointIds: string[];
   coreGraphSampleRate: CoreGraphSampleRate;
   coreGraphDenseSpecialCurveSampling: boolean;
   coreGraphSpecialCurveNeighborhoodOnly: boolean;
   coreGraphStrictTwoLineSuperset: boolean;
+  coreGraphRelaxedPPoints: boolean;
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
@@ -340,11 +344,13 @@ type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'poin
   coreCaseIntervalPointFractions?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
   coreCaseStrictTwoLineSuperset?: unknown;
+  coreCaseRelaxedPPoints?: unknown;
   coreGraphDisabledPointIds?: unknown;
   coreGraphSampleRate?: unknown;
   coreGraphDenseSpecialCurveSampling?: unknown;
   coreGraphSpecialCurveNeighborhoodOnly?: unknown;
   coreGraphStrictTwoLineSuperset?: unknown;
+  coreGraphRelaxedPPoints?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -517,6 +523,25 @@ function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
     ids.add(pointId);
   }
   coreCaseDisabledPointIds = sanitizeCoreCasePointIds(Array.from(ids));
+}
+
+function setCoreCaseRelaxedPPoints(enabled: boolean): void {
+  coreCaseOptions.relaxedPPoints = enabled;
+  if (enabled) {
+    coreCaseOptions.forceSum3 = false;
+    coreCaseOptions.forceSum5 = false;
+  }
+}
+
+function setCoreCaseForceSum(index: 3 | 5, enabled: boolean): void {
+  if (index === 3) {
+    coreCaseOptions.forceSum3 = enabled;
+  } else {
+    coreCaseOptions.forceSum5 = enabled;
+  }
+  if (enabled) {
+    coreCaseOptions.relaxedPPoints = false;
+  }
 }
 
 function coreCasePointerMath(event: PointerEvent): Point {
@@ -1049,11 +1074,13 @@ function getControllerSnapshot(): ControllerSnapshot {
     coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
     coreCaseStrictTwoLineSuperset: coreCaseOptions.strictTwoLineSuperset,
+    coreCaseRelaxedPPoints: coreCaseOptions.relaxedPPoints,
     coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
     coreGraphSampleRate: coreGraphRenderer.getSampleRate(),
     coreGraphDenseSpecialCurveSampling: coreGraphRenderer.getDenseSpecialCurveSampling(),
     coreGraphSpecialCurveNeighborhoodOnly: coreGraphRenderer.getSpecialCurveNeighborhoodOnly(),
     coreGraphStrictTwoLineSuperset: coreGraphRenderer.getStrictTwoLineSuperset(),
+    coreGraphRelaxedPPoints: coreGraphRenderer.getRelaxedPPoints(),
   };
 }
 
@@ -1153,6 +1180,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   if ('coreCaseStrictTwoLineSuperset' in parsed && typeof parsed.coreCaseStrictTwoLineSuperset !== 'boolean') {
     throw new Error('Invalid coreCaseStrictTwoLineSuperset.');
   }
+  if ('coreCaseRelaxedPPoints' in parsed && typeof parsed.coreCaseRelaxedPPoints !== 'boolean') {
+    throw new Error('Invalid coreCaseRelaxedPPoints.');
+  }
   if (!isCoreGraphSampleRate(parsed.coreGraphSampleRate)) {
     throw new Error('Invalid coreGraphSampleRate.');
   }
@@ -1167,6 +1197,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     typeof parsed.coreGraphStrictTwoLineSuperset !== 'boolean'
   ) {
     throw new Error('Invalid coreGraphStrictTwoLineSuperset.');
+  }
+  if ('coreGraphRelaxedPPoints' in parsed && typeof parsed.coreGraphRelaxedPPoints !== 'boolean') {
+    throw new Error('Invalid coreGraphRelaxedPPoints.');
   }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
@@ -1213,11 +1246,13 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
     coreCaseStrictTwoLineSuperset: parsed.coreCaseStrictTwoLineSuperset ?? false,
+    coreCaseRelaxedPPoints: parsed.coreCaseRelaxedPPoints ?? false,
     coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
     coreGraphSampleRate: parsed.coreGraphSampleRate,
     coreGraphDenseSpecialCurveSampling: parsed.coreGraphDenseSpecialCurveSampling,
     coreGraphSpecialCurveNeighborhoodOnly: parsed.coreGraphSpecialCurveNeighborhoodOnly,
     coreGraphStrictTwoLineSuperset: parsed.coreGraphStrictTwoLineSuperset ?? false,
+    coreGraphRelaxedPPoints: parsed.coreGraphRelaxedPPoints ?? false,
   };
 }
 
@@ -1251,10 +1286,12 @@ function loadControllerSnapshot(raw: string): void {
   coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
   coreCaseOptions.strictTwoLineSuperset = snapshot.coreCaseStrictTwoLineSuperset;
+  setCoreCaseRelaxedPPoints(snapshot.coreCaseRelaxedPPoints);
   coreGraphRenderer.setSampleRate(snapshot.coreGraphSampleRate);
   coreGraphRenderer.setDenseSpecialCurveSampling(snapshot.coreGraphDenseSpecialCurveSampling);
   coreGraphRenderer.setSpecialCurveNeighborhoodOnly(snapshot.coreGraphSpecialCurveNeighborhoodOnly);
   coreGraphRenderer.setStrictTwoLineSuperset(snapshot.coreGraphStrictTwoLineSuperset);
+  coreGraphRenderer.setRelaxedPPoints(snapshot.coreGraphRelaxedPPoints);
   coreGraphRenderer.setEnabledPointIds(
     CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
   );
@@ -3246,10 +3283,11 @@ function countWord(count: number): string {
 }
 
 function coreCaseConstraintSummary(): string {
-  const r3 = coreCaseOptions.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
-  const r5 = coreCaseOptions.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
+  const r3 = coreCaseOptions.forceSum3 && !coreCaseOptions.relaxedPPoints ? 'a3+b3=1' : 'a3+b3<=1';
+  const r5 = coreCaseOptions.forceSum5 && !coreCaseOptions.relaxedPPoints ? 'a5+b5=1' : 'a5+b5<=1';
   const model = coreCaseOptions.strictTwoLineSuperset ? 'two-line AB superset' : 'exact AB';
-  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1; ${model}`;
+  const pModel = coreCaseOptions.relaxedPPoints ? 'relaxed P circles' : 'actual P circles';
+  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1; ${model}; ${pModel}`;
 }
 
 function syncCoreGraphPanel(): void {
@@ -3266,6 +3304,7 @@ function syncCoreGraphPanel(): void {
   coreDenseSpecialCurveToggle.checked = coreGraphRenderer.getDenseSpecialCurveSampling();
   coreSpecialNeighborhoodToggle.checked = coreGraphRenderer.getSpecialCurveNeighborhoodOnly();
   coreStrictTwoLineToggle.checked = coreGraphRenderer.getStrictTwoLineSuperset();
+  coreRelaxedPToggle.checked = coreGraphRenderer.getRelaxedPPoints();
   coreGraphStatus.textContent = sample.side === null
     ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
     : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
@@ -3300,8 +3339,14 @@ function renderCoreCasePanel(result: CoreCaseRenderResult): void {
   const forceControls = `
     <div class="ab-union-toolbar">
       <span>force</span>
-      <label><input type="checkbox" data-core-case-force-sum="3"${coreCaseOptions.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
-      <label><input type="checkbox" data-core-case-force-sum="5"${coreCaseOptions.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="3"${coreCaseOptions.forceSum3 && !coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>a3+b3=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="5"${coreCaseOptions.forceSum5 && !coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>a5+b5=1</label>
+    </div>
+  `;
+  const pPointControls = `
+    <div class="ab-union-toolbar">
+      <span>P circles</span>
+      <label><input type="checkbox" data-core-case-relaxed-p${coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>relaxed P circles</label>
     </div>
   `;
   const dPointControls = `
@@ -3316,7 +3361,7 @@ function renderCoreCasePanel(result: CoreCaseRenderResult): void {
       <label><input type="checkbox" data-core-case-strict-two-line${coreCaseOptions.strictTwoLineSuperset ? ' checked' : ''}/>two-line AB superset</label>
     </div>
   `;
-  const optionControls = `${hardLimitControls}${forceControls}${dPointControls}${regionControls}`;
+  const optionControls = `${hardLimitControls}${forceControls}${pPointControls}${dPointControls}${regionControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -3687,7 +3732,7 @@ function render(): void {
     drawCoreCaseGraphSample(ctx, sample);
 
     gammaValues.textContent = `a4=${sample.a.toFixed(6)}, b4=${sample.b.toFixed(6)}, a4+b4-1=${sample.strictGap.toExponential(3)}`;
-    localCBounds.textContent = `Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2; ${coreGraphRenderer.getStrictTwoLineSuperset() ? 'two-line AB superset' : 'exact AB'}`;
+    localCBounds.textContent = `Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2; ${coreGraphRenderer.getStrictTwoLineSuperset() ? 'two-line AB superset' : 'exact AB'}; ${coreGraphRenderer.getRelaxedPPoints() ? 'relaxed P circles' : 'actual P circles'}`;
     const enabledCoreGraphPoints = sample.points.filter((point) => point.enabled).map((point) => point.id).join(' ');
     localCValues.textContent = sample.side === null
       ? `f(a,b) unavailable: ${sample.status}`
@@ -3840,6 +3885,11 @@ coreSpecialNeighborhoodToggle.addEventListener('change', () => {
 
 coreStrictTwoLineToggle.addEventListener('change', () => {
   coreGraphRenderer.setStrictTwoLineSuperset(coreStrictTwoLineToggle.checked);
+  render();
+});
+
+coreRelaxedPToggle.addEventListener('change', () => {
+  coreGraphRenderer.setRelaxedPPoints(coreRelaxedPToggle.checked);
   render();
 });
 
@@ -4504,12 +4554,17 @@ abUnionControls.addEventListener('change', (event) => {
   }
   if (target instanceof HTMLInputElement && target.dataset.coreCaseForceSum !== undefined) {
     if (target.dataset.coreCaseForceSum === '3') {
-      coreCaseOptions.forceSum3 = target.checked;
+      setCoreCaseForceSum(3, target.checked);
       render();
     } else if (target.dataset.coreCaseForceSum === '5') {
-      coreCaseOptions.forceSum5 = target.checked;
+      setCoreCaseForceSum(5, target.checked);
       render();
     }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseRelaxedP !== undefined) {
+    setCoreCaseRelaxedPPoints(target.checked);
+    render();
     return;
   }
   if (target instanceof HTMLInputElement && target.dataset.coreCaseAlgorithm2Diagonals !== undefined) {

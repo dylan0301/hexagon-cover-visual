@@ -30,6 +30,7 @@ const DEFAULT_CORE_CASE_OPTIONS = {
   hardLimitDrag: false,
   algorithm2Diagonals: false,
   strictTwoLineSuperset: false,
+  relaxedPPoints: false,
 } as const;
 
 export interface CircleGeometry {
@@ -47,6 +48,7 @@ interface CoreCasePointContext {
   algorithm2Diagonals: boolean;
   algorithm2P: number;
   algorithm2Q: number;
+  relaxedPPoints: boolean;
 }
 
 interface CoreCasePointDefinition {
@@ -61,6 +63,7 @@ export interface CoreCaseOptions {
   hardLimitDrag: boolean;
   algorithm2Diagonals: boolean;
   strictTwoLineSuperset: boolean;
+  relaxedPPoints: boolean;
 }
 
 export interface CoreCasePoint {
@@ -127,6 +130,14 @@ function clamp(value: number, low: number, high: number): number {
 
 function localRegionVariant(options: Pick<CoreCaseOptions, 'strictTwoLineSuperset'>): AbUnionLocalRegionVariant {
   return options.strictTwoLineSuperset ? 'strict-two-line-superset' : 'exact';
+}
+
+function effectiveForceSum3(options: Pick<CoreCaseOptions, 'forceSum3' | 'relaxedPPoints'>): boolean {
+  return options.forceSum3 && !options.relaxedPPoints;
+}
+
+function effectiveForceSum5(options: Pick<CoreCaseOptions, 'forceSum5' | 'relaxedPPoints'>): boolean {
+  return options.forceSum5 && !options.relaxedPPoints;
 }
 
 function distance(a: Point, b: Point): number {
@@ -220,23 +231,39 @@ function enforceCoreCaseCommonState(
 }
 
 function coreCaseConstraints(options: CoreCaseOptions): readonly CoreCaseConstraint[] {
-  return ['<= 1', '<= 1', '<= 1', options.forceSum3 ? '= 1' : '<= 1', '> 1', options.forceSum5 ? '= 1' : '<= 1'];
+  return [
+    '<= 1',
+    '<= 1',
+    '<= 1',
+    effectiveForceSum3(options) ? '= 1' : '<= 1',
+    '> 1',
+    effectiveForceSum5(options) ? '= 1' : '<= 1',
+  ];
 }
 
 function coreCaseFixedSums(options: CoreCaseOptions): Array<number | null> {
-  return [null, null, null, options.forceSum3 ? 1 : null, null, options.forceSum5 ? 1 : null];
+  return [
+    null,
+    null,
+    null,
+    effectiveForceSum3(options) ? 1 : null,
+    null,
+    effectiveForceSum5(options) ? 1 : null,
+  ];
 }
 
 function clampCoreCaseTValues(t: number[], options: CoreCaseOptions): number[] {
-  let t2 = clamp01(options.forceSum3 ? (t[2] + t[3]) / 2 : t[2]);
-  let t3 = clamp01(options.forceSum3 ? t2 : t[3]);
-  let t4 = clamp01(options.forceSum5 ? (t[4] + t[5]) / 2 : t[4]);
-  let t5 = clamp01(options.forceSum5 ? t4 : t[5]);
+  const forceSum3 = effectiveForceSum3(options);
+  const forceSum5 = effectiveForceSum5(options);
+  let t2 = clamp01(forceSum3 ? (t[2] + t[3]) / 2 : t[2]);
+  let t3 = clamp01(forceSum3 ? t2 : t[3]);
+  let t4 = clamp01(forceSum5 ? (t[4] + t[5]) / 2 : t[4]);
+  let t5 = clamp01(forceSum5 ? t4 : t[5]);
 
   t4 = Math.max(t4, STRICT_GAP);
-  t5 = options.forceSum5 ? t4 : clamp(t5, 0, t4);
+  t5 = forceSum5 ? t4 : clamp(t5, 0, t4);
 
-  if (options.forceSum3) {
+  if (forceSum3) {
     t2 = clamp(t2, 0, Math.max(0, Math.min(t5, t4 - STRICT_GAP)));
     t3 = t2;
   } else {
@@ -244,7 +271,7 @@ function clampCoreCaseTValues(t: number[], options: CoreCaseOptions): number[] {
     t3 = clamp(t3, 0, Math.max(0, Math.min(t2, t4 - STRICT_GAP)));
   }
 
-  t5 = options.forceSum5 ? t4 : clamp(t5, t2, t4);
+  t5 = forceSum5 ? t4 : clamp(t5, t2, t4);
   const t0 = clamp(t[0], t2, t5);
   const t1 = clamp(t[1], t2, t0);
   return [t0, t1, t2, t3, t4, t5];
@@ -273,10 +300,10 @@ function clampCoreCaseSplitRows(state: AbUnionState, options: CoreCaseOptions): 
   for (const index of [0, 1, 2]) {
     clampCoreCaseRowAtMostOne(state, index);
   }
-  if (!options.forceSum3) {
+  if (!effectiveForceSum3(options)) {
     clampCoreCaseRowAtMostOne(state, 3);
   }
-  if (!options.forceSum5) {
+  if (!effectiveForceSum5(options)) {
     clampCoreCaseRowAtMostOne(state, 5);
   }
 }
@@ -409,6 +436,22 @@ function circleGeometries(tValues: number[]): CircleGeometry[] {
   return [
     { id: 'C2', center: x2 },
     { id: 'C5', center: x5 },
+  ];
+}
+
+function coreCaseCircleGeometries(
+  tValues: number[],
+  aValues: number[],
+  bValues: number[],
+  relaxedPPoints: boolean,
+): CircleGeometry[] {
+  if (!relaxedPPoints) {
+    return circleGeometries(tValues);
+  }
+
+  return [
+    { id: 'C2', center: pointOnEdge(2, bValues[4]) },
+    { id: 'C5', center: pointOnEdge(5, 1 - aValues[4]) },
   ];
 }
 
@@ -978,6 +1021,7 @@ export function evaluateCoreCaseGraph(
   b: number,
   enabledPointIds?: readonly string[],
   variant: AbUnionLocalRegionVariant = 'exact',
+  relaxedPPoints = false,
 ): CoreCaseGraphSample {
   const domainIssue = coreCaseGraphDomainIssue(a, b);
   if (domainIssue) {
@@ -999,7 +1043,8 @@ export function evaluateCoreCaseGraph(
 
   const aValues = [0, 0, 0, 0, a, 0];
   const bValues = [0, 0, 0, 0, b, 0];
-  const circles = circleGeometries([0, 0, 1 - a, 0, 0, b]);
+  const tValues = [0, 0, 1 - a, 0, 0, b];
+  const circles = coreCaseCircleGeometries(tValues, aValues, bValues, relaxedPPoints);
   const points = buildCoreCasePoints(
     {
       circles,
@@ -1009,6 +1054,7 @@ export function evaluateCoreCaseGraph(
       algorithm2Diagonals: true,
       algorithm2P: 1 - b,
       algorithm2Q: 1 - a,
+      relaxedPPoints,
     },
     coreCaseGraphDisabledPointSet(enabledPointIds),
   );
@@ -1053,7 +1099,11 @@ function buildCoreCasePoints(
     id: definition.id,
     label: context.algorithm2Diagonals && definition.id.startsWith('D')
       ? `algorithm 2 on O-V${definition.id.slice(1)}`
-      : definition.label,
+      : context.relaxedPPoints && definition.id === 'P3'
+        ? 'R4/virtual C2'
+        : context.relaxedPPoints && definition.id === 'P5'
+          ? 'R4/virtual C5'
+          : definition.label,
     point: definition.build(context),
     enabled: disabledIds === null || !disabledIds.has(definition.id),
   }));
@@ -1102,7 +1152,7 @@ export function renderCoreCase(
   const aValues = abUnionAValues(state);
   const bValues = abUnionBValues(state);
   const tValues = readTValues(state);
-  const circles = circleGeometries(tValues);
+  const circles = coreCaseCircleGeometries(tValues, aValues, bValues, options.relaxedPPoints);
   const disabledIds = disabledPointSet(renderOptions.disabledPointIds);
   const algorithm2 = algorithm2Parameters(state, aValues, bValues);
   const points = [
@@ -1115,6 +1165,7 @@ export function renderCoreCase(
         algorithm2Diagonals: options.algorithm2Diagonals,
         algorithm2P: algorithm2.p,
         algorithm2Q: algorithm2.q,
+        relaxedPPoints: options.relaxedPPoints,
       },
       disabledIds,
     ),

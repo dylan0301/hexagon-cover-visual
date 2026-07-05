@@ -82,6 +82,8 @@ export interface CoreGraphRenderer {
   getSpecialCurveNeighborhoodOnly(): boolean;
   setStrictTwoLineSuperset(value: boolean): void;
   getStrictTwoLineSuperset(): boolean;
+  setRelaxedPPoints(value: boolean): void;
+  getRelaxedPPoints(): boolean;
   setEnabledPointIds(ids: readonly string[]): void;
   getEnabledPointIds(): string[];
   setOnSelectionChange(callback: (sample: CoreCaseGraphSample) => void): void;
@@ -212,6 +214,7 @@ function buildGrid(
   enabledPointIds: readonly string[],
   sampleRate: CoreGraphSampleRate,
   variant: AbUnionLocalRegionVariant,
+  relaxedPPoints: boolean,
   denseCurve: MinimumCurve | null = null,
 ): GridData {
   const samples = buildSamples(sampleRate, denseCurve);
@@ -223,7 +226,7 @@ function buildGrid(
     for (const a of samples.a) {
       const domain = sampleDomainNode(a, s);
       const sample = domain.valid
-        ? evaluateCoreCaseGraph(domain.a, domain.b, enabledPointIds, variant)
+        ? evaluateCoreCaseGraph(domain.a, domain.b, enabledPointIds, variant, relaxedPPoints)
         : null;
       const side = finiteSide(sample?.side ?? null) ? sample?.side ?? null : null;
       if (side !== null) {
@@ -437,8 +440,9 @@ export function createCoreGraphRenderer(
   let denseSpecialCurveSampling = false;
   let specialCurveNeighborhoodOnly = false;
   let strictTwoLineSuperset = false;
+  let relaxedPPoints = false;
   let specialCurve: MinimumCurve | null = null;
-  let grid = buildGrid(enabledPointIds, sampleRate, currentLocalRegionVariant());
+  let grid = buildGrid(enabledPointIds, sampleRate, currentLocalRegionVariant(), relaxedPPoints);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
 
@@ -491,7 +495,13 @@ export function createCoreGraphRenderer(
   let activeHeatmapPointer: number | null = null;
   let lastSurfacePoint: CanvasPoint | null = null;
   let sliceK = (grid.minSide + grid.maxSide) / 2;
-  let selection = evaluateCoreCaseGraph(0.55, 0.55, enabledPointIds, currentLocalRegionVariant());
+  let selection = evaluateCoreCaseGraph(
+    0.55,
+    0.55,
+    enabledPointIds,
+    currentLocalRegionVariant(),
+    relaxedPPoints,
+  );
   let onSelectionChange: ((sample: CoreCaseGraphSample) => void) | null = null;
 
   function currentLocalRegionVariant(): AbUnionLocalRegionVariant {
@@ -505,7 +515,9 @@ export function createCoreGraphRenderer(
         const score = Math.hypot(node.a - 0.55, node.b - 0.55);
         return score < best.score ? { score, node } : best;
       }, { score: Number.POSITIVE_INFINITY, node: null as GridNode | null }).node;
-    return nearest ? evaluateCoreCaseGraph(nearest.a, nearest.b, enabledPointIds, currentLocalRegionVariant()) : null;
+    return nearest
+      ? evaluateCoreCaseGraph(nearest.a, nearest.b, enabledPointIds, currentLocalRegionVariant(), relaxedPPoints)
+      : null;
   }
 
   if (!selection.domainOk) {
@@ -514,7 +526,12 @@ export function createCoreGraphRenderer(
 
   function getSpecialCurve(): MinimumCurve {
     if (specialCurve === null) {
-      specialCurve = buildGrid(CORE_CASE_POINT_IDS, 'high', currentLocalRegionVariant()).minimumCurve;
+      specialCurve = buildGrid(
+        CORE_CASE_POINT_IDS,
+        'high',
+        currentLocalRegionVariant(),
+        relaxedPPoints,
+      ).minimumCurve;
     }
     return specialCurve;
   }
@@ -610,7 +627,13 @@ export function createCoreGraphRenderer(
   }
 
   function applySelection(a: number, b: number, emit: boolean): void {
-    const sample = evaluateCoreCaseGraph(clamp01(a), clamp01(b), enabledPointIds, currentLocalRegionVariant());
+    const sample = evaluateCoreCaseGraph(
+      clamp01(a),
+      clamp01(b),
+      enabledPointIds,
+      currentLocalRegionVariant(),
+      relaxedPPoints,
+    );
     if (!sample.domainOk) {
       return;
     }
@@ -899,6 +922,7 @@ export function createCoreGraphRenderer(
       enabledPointIds,
       sampleRate,
       currentLocalRegionVariant(),
+      relaxedPPoints,
       denseSpecialCurveSampling ? getSpecialCurve() : null,
     );
     refreshSurfaceGeometry();
@@ -906,7 +930,13 @@ export function createCoreGraphRenderer(
     minimumCurve.geometry.dispose();
     minimumCurve.geometry = nextCurveGeometry;
     sliceK = clamp(sliceK, grid.minSide, grid.maxSide);
-    selection = evaluateCoreCaseGraph(selection.a, selection.b, enabledPointIds, currentLocalRegionVariant());
+    selection = evaluateCoreCaseGraph(
+      selection.a,
+      selection.b,
+      enabledPointIds,
+      currentLocalRegionVariant(),
+      relaxedPPoints,
+    );
     if (!selection.domainOk) {
       selection = nearestValidSelection() ?? selection;
     }
@@ -1046,6 +1076,15 @@ export function createCoreGraphRenderer(
     },
     getStrictTwoLineSuperset(): boolean {
       return strictTwoLineSuperset;
+    },
+    setRelaxedPPoints(value: boolean): void {
+      if (value === relaxedPPoints) return;
+      relaxedPPoints = value;
+      specialCurve = null;
+      rebuildGrid();
+    },
+    getRelaxedPPoints(): boolean {
+      return relaxedPPoints;
     },
     setEnabledPointIds(ids: readonly string[]): void {
       const normalized = normalizeEnabledPointIds(ids);
