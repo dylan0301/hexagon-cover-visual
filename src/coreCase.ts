@@ -5,11 +5,14 @@ import { HEXAGON_VERTICES } from './hexagon';
 import {
   abUnionAValues,
   abUnionBValues,
+  abUnionStrictTwoLineSupersetSegments,
   containsAbUnionLocal,
   createDefaultAbUnionState,
   renderAbUnion,
   setAbUnionDotValue,
   type AbUnionDotHandle,
+  type AbUnionLocalLineSegment,
+  type AbUnionLocalRegionVariant,
   type AbUnionRenderResult,
   type AbUnionState,
 } from './abUnion';
@@ -19,11 +22,14 @@ const EDGE_AXIS_EPS = 1e-5;
 const BOUNDARY_STEPS = 240;
 const BINARY_STEPS = 42;
 const TRIANGLE_SUPPORT_TOL = 1e-6;
+const TWO_LINE_STROKE = '#c026d3';
+const TWO_LINE_FILL = '#fdf4ff';
 const DEFAULT_CORE_CASE_OPTIONS = {
   forceSum3: true,
   forceSum5: true,
   hardLimitDrag: false,
   algorithm2Diagonals: false,
+  strictTwoLineSuperset: false,
 } as const;
 
 export interface CircleGeometry {
@@ -37,6 +43,7 @@ interface CoreCasePointContext {
   circles: CircleGeometry[];
   aValues: number[];
   bValues: number[];
+  localRegionVariant: AbUnionLocalRegionVariant;
   algorithm2Diagonals: boolean;
   algorithm2P: number;
   algorithm2Q: number;
@@ -53,6 +60,7 @@ export interface CoreCaseOptions {
   forceSum5: boolean;
   hardLimitDrag: boolean;
   algorithm2Diagonals: boolean;
+  strictTwoLineSuperset: boolean;
 }
 
 export interface CoreCasePoint {
@@ -86,6 +94,7 @@ export interface CoreCaseRenderResult {
   enabledPointCount: number;
   triangle: CoverTriangle | null;
   strictGap: number;
+  localRegionVariant: AbUnionLocalRegionVariant;
   status: string;
 }
 
@@ -100,6 +109,7 @@ export interface CoreCaseGraphSample {
   triangle: CoverTriangle | null;
   side: number | null;
   strictGap: number;
+  localRegionVariant: AbUnionLocalRegionVariant;
   status: string;
 }
 
@@ -113,6 +123,10 @@ function clamp01(value: number): number {
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
+}
+
+function localRegionVariant(options: Pick<CoreCaseOptions, 'strictTwoLineSuperset'>): AbUnionLocalRegionVariant {
+  return options.strictTwoLineSuperset ? 'strict-two-line-superset' : 'exact';
 }
 
 function distance(a: Point, b: Point): number {
@@ -398,19 +412,35 @@ function circleGeometries(tValues: number[]): CircleGeometry[] {
   ];
 }
 
-function containsR4(point: Point, a4: number, b4: number): boolean {
+function containsR4(
+  point: Point,
+  a4: number,
+  b4: number,
+  variant: AbUnionLocalRegionVariant,
+): boolean {
   const local = localCoordinates(4, point);
-  return containsAbUnionLocal(local.u, local.v, a4, b4);
+  return containsAbUnionLocal(local.u, local.v, a4, b4, variant);
 }
 
-function containsRegion(point: Point, index: number, aValues: number[], bValues: number[]): boolean {
+function containsRegion(
+  point: Point,
+  index: number,
+  aValues: number[],
+  bValues: number[],
+  variant: AbUnionLocalRegionVariant,
+): boolean {
   const local = localCoordinates(index, point);
-  return containsAbUnionLocal(local.u, local.v, aValues[index], bValues[index]);
+  return containsAbUnionLocal(local.u, local.v, aValues[index], bValues[index], variant);
 }
 
-function isRedPoint(point: Point, aValues: number[], bValues: number[]): boolean {
+function isRedPoint(
+  point: Point,
+  aValues: number[],
+  bValues: number[],
+  variant: AbUnionLocalRegionVariant,
+): boolean {
   return !Array.from({ length: 6 }, (_, index) => index)
-    .some((index) => containsRegion(point, index, aValues, bValues));
+    .some((index) => containsRegion(point, index, aValues, bValues, variant));
 }
 
 function findBoundaryOnParam(
@@ -458,8 +488,13 @@ function pointOnCircle(circle: CircleGeometry, t: number): Point {
   };
 }
 
-function boundaryIntersectionsWithCircle(circle: CircleGeometry, a4: number, b4: number): Point[] {
-  const contains = (point: Point) => containsR4(point, a4, b4);
+function boundaryIntersectionsWithCircle(
+  circle: CircleGeometry,
+  a4: number,
+  b4: number,
+  variant: AbUnionLocalRegionVariant,
+): Point[] {
+  const contains = (point: Point) => containsR4(point, a4, b4, variant);
   const points: Point[] = [];
   let previousT = 0;
   let previousInside = contains(pointOnCircle(circle, 0));
@@ -500,8 +535,13 @@ function closestCurvePointToV4(points: Point[]): Point | null {
   ));
 }
 
-function v4CirclePoint(circle: CircleGeometry, a4: number, b4: number): Point | null {
-  return closestCurvePointToV4(boundaryIntersectionsWithCircle(circle, a4, b4));
+function v4CirclePoint(
+  circle: CircleGeometry,
+  a4: number,
+  b4: number,
+  variant: AbUnionLocalRegionVariant,
+): Point | null {
+  return closestCurvePointToV4(boundaryIntersectionsWithCircle(circle, a4, b4, variant));
 }
 
 function t4RegionNonempty(a4: number, b4: number): boolean {
@@ -520,9 +560,14 @@ function p5FallbackPoint(a4: number, b4: number): Point | null {
   return t4RegionNonempty(a4, b4) ? pointOnEdge(4, b4) : null;
 }
 
-function diagonalRedWitness(index: number, aValues: number[], bValues: number[]): Point | null {
+function diagonalRedWitness(
+  index: number,
+  aValues: number[],
+  bValues: number[],
+  variant: AbUnionLocalRegionVariant,
+): Point | null {
   const pointAt = (t: number) => scale(t, HEXAGON_VERTICES[index]);
-  const red = (point: Point) => isRedPoint(point, aValues, bValues);
+  const red = (point: Point) => isRedPoint(point, aValues, bValues, variant);
   if (!red(pointAt(0))) return null;
   return findBoundaryOnParam(pointAt, red) ?? pointAt(1);
 }
@@ -600,14 +645,18 @@ function strictAbUnionLineJunction(outLen: number, inLen: number): Point | null 
   return { x: Math.max(0, u), y: Math.max(0, v) };
 }
 
-function t4LineJunctionPoint(aValues: number[], bValues: number[]): Point | null {
+function t4LineJunctionPoint(
+  aValues: number[],
+  bValues: number[],
+  variant: AbUnionLocalRegionVariant,
+): Point | null {
   const a4 = aValues[4];
   const b4 = bValues[4];
   const local = strictAbUnionLineJunction(b4, a4);
   if (local === null) return null;
 
   const point = pointFromLocalCoordinates(4, local.x, local.y);
-  return containsR4(point, a4, b4) ? point : null;
+  return containsR4(point, a4, b4, variant) ? point : null;
 }
 
 function constraintOk(sum: number, constraint: CoreCaseConstraint): boolean {
@@ -656,6 +705,67 @@ function drawPolygon(ctx: CanvasRenderingContext2D, points: Point[], stroke: str
   ctx.fill();
   ctx.stroke();
   ctx.restore();
+}
+
+function localSegmentToWorld(index: number, segment: AbUnionLocalLineSegment): { start: Point; end: Point } {
+  return {
+    start: pointFromLocalCoordinates(index, segment.start.x, segment.start.y),
+    end: pointFromLocalCoordinates(index, segment.end.x, segment.end.y),
+  };
+}
+
+function drawTwoLineSupersetSegments(
+  ctx: CanvasRenderingContext2D,
+  index: number,
+  a: number,
+  b: number,
+): void {
+  const localSegments = abUnionStrictTwoLineSupersetSegments(a, b);
+  if (localSegments.length === 0) return;
+
+  const segments = localSegments.map((segment) => localSegmentToWorld(index, segment));
+  const endpoints = [segments[0].start, segments[0].end, segments[1].end];
+
+  ctx.save();
+  ctx.setLineDash([8, 5]);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = TWO_LINE_STROKE;
+  ctx.lineWidth = 2.6;
+  for (const segment of segments) {
+    const start = mathToCanvas(segment.start);
+    const end = mathToCanvas(segment.end);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save();
+  for (const endpoint of endpoints) {
+    const point = mathToCanvas(endpoint);
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 4.2, 0, 2 * Math.PI);
+    ctx.fillStyle = TWO_LINE_FILL;
+    ctx.fill();
+    ctx.strokeStyle = TWO_LINE_STROKE;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawTwoLineSupersetOverlay(
+  ctx: CanvasRenderingContext2D,
+  aValues: readonly number[],
+  bValues: readonly number[],
+  variant: AbUnionLocalRegionVariant,
+): void {
+  if (variant !== 'strict-two-line-superset') return;
+  for (let index = 0; index < 6; index++) {
+    drawTwoLineSupersetSegments(ctx, index, aValues[index], bValues[index]);
+  }
 }
 
 function supportPointIds(points: CoreCasePoint[], triangle: CoverTriangle | null): ReadonlySet<string> {
@@ -731,7 +841,12 @@ function inLocalHexFootprint(u: number, v: number): boolean {
     Math.abs(u - v) <= 1 + EDGE_AXIS_EPS;
 }
 
-function drawCoreGraphT4Region(ctx: CanvasRenderingContext2D, a4: number, b4: number): void {
+function drawCoreGraphT4Region(
+  ctx: CanvasRenderingContext2D,
+  a4: number,
+  b4: number,
+  variant: AbUnionLocalRegionVariant,
+): void {
   const step = Math.max(1, Math.round(config.canvasSize / 300));
   ctx.save();
   ctx.fillStyle = 'rgba(132, 204, 22, 0.22)';
@@ -739,7 +854,7 @@ function drawCoreGraphT4Region(ctx: CanvasRenderingContext2D, a4: number, b4: nu
     for (let x = 0; x < config.canvasSize; x += step) {
       const point = canvasToMath({ x: x + step / 2, y: y + step / 2 });
       const local = localCoordinates(4, point);
-      if (inLocalHexFootprint(local.u, local.v) && containsAbUnionLocal(local.u, local.v, a4, b4)) {
+      if (inLocalHexFootprint(local.u, local.v) && containsAbUnionLocal(local.u, local.v, a4, b4, variant)) {
         ctx.fillRect(x, y, step, step);
       }
     }
@@ -779,7 +894,10 @@ function drawCoreGraphEdgeMarkers(ctx: CanvasRenderingContext2D, a4: number, b4:
 
 export function drawCoreCaseGraphSample(ctx: CanvasRenderingContext2D, sample: CoreCaseGraphSample): void {
   if (!sample.domainOk) return;
-  drawCoreGraphT4Region(ctx, sample.a, sample.b);
+  drawCoreGraphT4Region(ctx, sample.a, sample.b, sample.localRegionVariant);
+  if (sample.localRegionVariant === 'strict-two-line-superset') {
+    drawTwoLineSupersetSegments(ctx, 4, sample.a, sample.b);
+  }
   drawOverlay(ctx, sample.circles, sample.points, sample.triangle);
   drawCoreGraphEdgeMarkers(ctx, sample.a, sample.b);
 }
@@ -788,40 +906,42 @@ const CORE_CASE_POINT_DEFINITIONS: readonly CoreCasePointDefinition[] = [
   {
     id: 'P3',
     label: 'R4/C2',
-    build: ({ circles, aValues, bValues }) =>
-      v4CirclePoint(circles[0], aValues[4], bValues[4]) ?? p3FallbackPoint(aValues[4], bValues[4]),
+    build: ({ circles, aValues, bValues, localRegionVariant }) =>
+      v4CirclePoint(circles[0], aValues[4], bValues[4], localRegionVariant) ??
+      p3FallbackPoint(aValues[4], bValues[4]),
   },
   {
     id: 'P4',
     label: 'T4 line-line junction',
-    build: ({ aValues, bValues }) => t4LineJunctionPoint(aValues, bValues),
+    build: ({ aValues, bValues, localRegionVariant }) => t4LineJunctionPoint(aValues, bValues, localRegionVariant),
   },
   {
     id: 'P5',
     label: 'R4/C5',
-    build: ({ circles, aValues, bValues }) =>
-      v4CirclePoint(circles[1], aValues[4], bValues[4]) ?? p5FallbackPoint(aValues[4], bValues[4]),
+    build: ({ circles, aValues, bValues, localRegionVariant }) =>
+      v4CirclePoint(circles[1], aValues[4], bValues[4], localRegionVariant) ??
+      p5FallbackPoint(aValues[4], bValues[4]),
   },
   {
     id: 'D0',
     label: 'red on O-V0',
-    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+    build: ({ aValues, bValues, localRegionVariant, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
       ? algorithm2DiagonalPoint(0, algorithm2P, algorithm2Q)
-      : diagonalRedWitness(0, aValues, bValues),
+      : diagonalRedWitness(0, aValues, bValues, localRegionVariant),
   },
   {
     id: 'D1',
     label: 'red on O-V1',
-    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+    build: ({ aValues, bValues, localRegionVariant, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
       ? algorithm2DiagonalPoint(1, algorithm2P, algorithm2Q)
-      : diagonalRedWitness(1, aValues, bValues),
+      : diagonalRedWitness(1, aValues, bValues, localRegionVariant),
   },
   {
     id: 'D2',
     label: 'red on O-V2',
-    build: ({ aValues, bValues, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
+    build: ({ aValues, bValues, localRegionVariant, algorithm2Diagonals, algorithm2P, algorithm2Q }) => algorithm2Diagonals
       ? algorithm2DiagonalPoint(2, algorithm2P, algorithm2Q)
-      : diagonalRedWitness(2, aValues, bValues),
+      : diagonalRedWitness(2, aValues, bValues, localRegionVariant),
   },
 ];
 
@@ -857,6 +977,7 @@ export function evaluateCoreCaseGraph(
   a: number,
   b: number,
   enabledPointIds?: readonly string[],
+  variant: AbUnionLocalRegionVariant = 'exact',
 ): CoreCaseGraphSample {
   const domainIssue = coreCaseGraphDomainIssue(a, b);
   if (domainIssue) {
@@ -871,6 +992,7 @@ export function evaluateCoreCaseGraph(
       triangle: null,
       side: null,
       strictGap: a + b - 1,
+      localRegionVariant: variant,
       status: domainIssue,
     };
   }
@@ -883,6 +1005,7 @@ export function evaluateCoreCaseGraph(
       circles,
       aValues,
       bValues,
+      localRegionVariant: variant,
       algorithm2Diagonals: true,
       algorithm2P: 1 - b,
       algorithm2Q: 1 - a,
@@ -910,6 +1033,7 @@ export function evaluateCoreCaseGraph(
     triangle,
     side: triangle?.side ?? null,
     strictGap: a + b - 1,
+    localRegionVariant: variant,
     status,
   };
 }
@@ -968,7 +1092,11 @@ export function renderCoreCase(
   renderOptions: CoreCaseRenderOptions = {},
 ): CoreCaseRenderResult {
   enforceCoreCaseConstraints(state, options);
-  const base = renderAbUnion(ctx, state, triangleState, localCs, { computeTheta: false });
+  const variant = localRegionVariant(options);
+  const base = renderAbUnion(ctx, state, triangleState, localCs, {
+    computeTheta: false,
+    localRegionVariant: variant,
+  });
   enforceCoreCaseConstraints(state, options);
 
   const aValues = abUnionAValues(state);
@@ -983,6 +1111,7 @@ export function renderCoreCase(
         circles,
         aValues,
         bValues,
+        localRegionVariant: variant,
         algorithm2Diagonals: options.algorithm2Diagonals,
         algorithm2P: algorithm2.p,
         algorithm2Q: algorithm2.q,
@@ -996,6 +1125,7 @@ export function renderCoreCase(
   const triangle = enabledPoints.length > 0 && concretePoints.length === enabledPoints.length
     ? fitTriangle('Core Case', concretePoints, '#eab308')
     : null;
+  drawTwoLineSupersetOverlay(ctx, aValues, bValues, variant);
   drawOverlay(ctx, circles, points, triangle);
 
   const missing = enabledPoints.filter((item) => item.point === null).map((item) => item.id);
@@ -1015,6 +1145,7 @@ export function renderCoreCase(
     enabledPointCount: enabledPoints.length,
     triangle,
     strictGap: aValues[4] + bValues[4] - 1,
+    localRegionVariant: variant,
     status,
   };
 }

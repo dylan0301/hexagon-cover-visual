@@ -42,3 +42,15 @@ make a checkbox if on, only show the neighborhood of that special curve both in 
 
 just delete the special curve showing.
 also, make the default sample rate low because it takes too much time loading. does this help reducing the loading time?
+
+try to figure out the pink minimum curve for the 6 points. try fitting with famous functions
+
+for both core case and f(a,b) core
+make a checkbox
+if checked, then for the a+b>1 case, instead of the ab union set, we use a larger set that contains the ab union set.
+the original ab union set has arc, line, line, arc.
+if we check, then we don't use the arc, we just use two lines extended.
+ask me questions
+
+refer to https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2009_ab_union_curve_a_plus_b_gt_1.md
+for ab union curves

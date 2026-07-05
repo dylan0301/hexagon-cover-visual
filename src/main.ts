@@ -222,6 +222,7 @@ const corePointControls = document.getElementById('core-point-controls') as HTML
 const coreSampleRateSelect = document.getElementById('core-sample-rate-select') as HTMLSelectElement;
 const coreDenseSpecialCurveToggle = document.getElementById('core-dense-special-curve-toggle') as HTMLInputElement;
 const coreSpecialNeighborhoodToggle = document.getElementById('core-special-neighborhood-toggle') as HTMLInputElement;
+const coreStrictTwoLineToggle = document.getElementById('core-strict-two-line-toggle') as HTMLInputElement;
 const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
 const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
 const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
@@ -268,6 +269,7 @@ let coreCaseOptions: CoreCaseOptions = {
   forceSum5: true,
   hardLimitDrag: false,
   algorithm2Diagonals: false,
+  strictTwoLineSuperset: false,
 };
 let coreCaseTool: CoreCaseTool = 'move';
 let coreCaseDisabledPointIds: string[] = [];
@@ -301,7 +303,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 8;
+  version: 9;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -322,23 +324,27 @@ interface ControllerSnapshot {
   coreCaseDisabledPointIds: string[];
   coreCaseIntervalPointFractions: number[];
   coreCaseAlgorithm2Diagonals: boolean;
+  coreCaseStrictTwoLineSuperset: boolean;
   coreGraphDisabledPointIds: string[];
   coreGraphSampleRate: CoreGraphSampleRate;
   coreGraphDenseSpecialCurveSampling: boolean;
   coreGraphSpecialCurveNeighborhoodOnly: boolean;
+  coreGraphStrictTwoLineSuperset: boolean;
 }
 
 type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
-  version?: 8;
+  version?: 8 | 9;
   pointSeeds?: unknown;
   coreCaseDisabledPointIds?: unknown;
   coreCaseEnabledPointIds?: unknown;
   coreCaseIntervalPointFractions?: unknown;
   coreCaseAlgorithm2Diagonals?: unknown;
+  coreCaseStrictTwoLineSuperset?: unknown;
   coreGraphDisabledPointIds?: unknown;
   coreGraphSampleRate?: unknown;
   coreGraphDenseSpecialCurveSampling?: unknown;
   coreGraphSpecialCurveNeighborhoodOnly?: unknown;
+  coreGraphStrictTwoLineSuperset?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -1017,7 +1023,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 8,
+    version: 9,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -1042,10 +1048,12 @@ function getControllerSnapshot(): ControllerSnapshot {
     coreCaseDisabledPointIds: coreCaseDisabledPointIds.slice(),
     coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
     coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
+    coreCaseStrictTwoLineSuperset: coreCaseOptions.strictTwoLineSuperset,
     coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
     coreGraphSampleRate: coreGraphRenderer.getSampleRate(),
     coreGraphDenseSpecialCurveSampling: coreGraphRenderer.getDenseSpecialCurveSampling(),
     coreGraphSpecialCurveNeighborhoodOnly: coreGraphRenderer.getSpecialCurveNeighborhoodOnly(),
+    coreGraphStrictTwoLineSuperset: coreGraphRenderer.getStrictTwoLineSuperset(),
   };
 }
 
@@ -1057,8 +1065,8 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 8) {
-    throw new Error('Unsupported snapshot version. Current version is 8.');
+  if (parsed.version !== 8 && parsed.version !== 9) {
+    throw new Error('Unsupported snapshot version. Current version is 9.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
     throw new Error('Invalid shapeMode.');
@@ -1142,6 +1150,9 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   if ('coreCaseAlgorithm2Diagonals' in parsed && typeof parsed.coreCaseAlgorithm2Diagonals !== 'boolean') {
     throw new Error('Invalid coreCaseAlgorithm2Diagonals.');
   }
+  if ('coreCaseStrictTwoLineSuperset' in parsed && typeof parsed.coreCaseStrictTwoLineSuperset !== 'boolean') {
+    throw new Error('Invalid coreCaseStrictTwoLineSuperset.');
+  }
   if (!isCoreGraphSampleRate(parsed.coreGraphSampleRate)) {
     throw new Error('Invalid coreGraphSampleRate.');
   }
@@ -1150,6 +1161,12 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   }
   if (typeof parsed.coreGraphSpecialCurveNeighborhoodOnly !== 'boolean') {
     throw new Error('Invalid coreGraphSpecialCurveNeighborhoodOnly.');
+  }
+  if (
+    'coreGraphStrictTwoLineSuperset' in parsed &&
+    typeof parsed.coreGraphStrictTwoLineSuperset !== 'boolean'
+  ) {
+    throw new Error('Invalid coreGraphStrictTwoLineSuperset.');
   }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
@@ -1170,7 +1187,7 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsedCoreGraphDisabledPointIds = sanitizeCoreGraphPointIds(parsed.coreGraphDisabledPointIds);
 
   return {
-    version: 8,
+    version: 9,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -1195,10 +1212,12 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     coreCaseDisabledPointIds: parsedCoreCaseDisabledPointIds,
     coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
     coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
+    coreCaseStrictTwoLineSuperset: parsed.coreCaseStrictTwoLineSuperset ?? false,
     coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
     coreGraphSampleRate: parsed.coreGraphSampleRate,
     coreGraphDenseSpecialCurveSampling: parsed.coreGraphDenseSpecialCurveSampling,
     coreGraphSpecialCurveNeighborhoodOnly: parsed.coreGraphSpecialCurveNeighborhoodOnly,
+    coreGraphStrictTwoLineSuperset: parsed.coreGraphStrictTwoLineSuperset ?? false,
   };
 }
 
@@ -1231,9 +1250,11 @@ function loadControllerSnapshot(raw: string): void {
   coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
   coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
   coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
+  coreCaseOptions.strictTwoLineSuperset = snapshot.coreCaseStrictTwoLineSuperset;
   coreGraphRenderer.setSampleRate(snapshot.coreGraphSampleRate);
   coreGraphRenderer.setDenseSpecialCurveSampling(snapshot.coreGraphDenseSpecialCurveSampling);
   coreGraphRenderer.setSpecialCurveNeighborhoodOnly(snapshot.coreGraphSpecialCurveNeighborhoodOnly);
+  coreGraphRenderer.setStrictTwoLineSuperset(snapshot.coreGraphStrictTwoLineSuperset);
   coreGraphRenderer.setEnabledPointIds(
     CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
   );
@@ -3227,7 +3248,8 @@ function countWord(count: number): string {
 function coreCaseConstraintSummary(): string {
   const r3 = coreCaseOptions.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
   const r5 = coreCaseOptions.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
-  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
+  const model = coreCaseOptions.strictTwoLineSuperset ? 'two-line AB superset' : 'exact AB';
+  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1; ${model}`;
 }
 
 function syncCoreGraphPanel(): void {
@@ -3243,6 +3265,7 @@ function syncCoreGraphPanel(): void {
   coreSampleRateSelect.value = coreGraphRenderer.getSampleRate();
   coreDenseSpecialCurveToggle.checked = coreGraphRenderer.getDenseSpecialCurveSampling();
   coreSpecialNeighborhoodToggle.checked = coreGraphRenderer.getSpecialCurveNeighborhoodOnly();
+  coreStrictTwoLineToggle.checked = coreGraphRenderer.getStrictTwoLineSuperset();
   coreGraphStatus.textContent = sample.side === null
     ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
     : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
@@ -3287,7 +3310,13 @@ function renderCoreCasePanel(result: CoreCaseRenderResult): void {
       <label><input type="checkbox" data-core-case-algorithm2-diagonals${coreCaseOptions.algorithm2Diagonals ? ' checked' : ''}/>algorithm 2</label>
     </div>
   `;
-  const optionControls = `${hardLimitControls}${forceControls}${dPointControls}`;
+  const regionControls = `
+    <div class="ab-union-toolbar">
+      <span>AB model</span>
+      <label><input type="checkbox" data-core-case-strict-two-line${coreCaseOptions.strictTwoLineSuperset ? ' checked' : ''}/>two-line AB superset</label>
+    </div>
+  `;
+  const optionControls = `${hardLimitControls}${forceControls}${dPointControls}${regionControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -3658,7 +3687,7 @@ function render(): void {
     drawCoreCaseGraphSample(ctx, sample);
 
     gammaValues.textContent = `a4=${sample.a.toFixed(6)}, b4=${sample.b.toFixed(6)}, a4+b4-1=${sample.strictGap.toExponential(3)}`;
-    localCBounds.textContent = 'Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2';
+    localCBounds.textContent = `Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2; ${coreGraphRenderer.getStrictTwoLineSuperset() ? 'two-line AB superset' : 'exact AB'}`;
     const enabledCoreGraphPoints = sample.points.filter((point) => point.enabled).map((point) => point.id).join(' ');
     localCValues.textContent = sample.side === null
       ? `f(a,b) unavailable: ${sample.status}`
@@ -3806,6 +3835,11 @@ coreDenseSpecialCurveToggle.addEventListener('change', () => {
 
 coreSpecialNeighborhoodToggle.addEventListener('change', () => {
   coreGraphRenderer.setSpecialCurveNeighborhoodOnly(coreSpecialNeighborhoodToggle.checked);
+  render();
+});
+
+coreStrictTwoLineToggle.addEventListener('change', () => {
+  coreGraphRenderer.setStrictTwoLineSuperset(coreStrictTwoLineToggle.checked);
   render();
 });
 
@@ -4480,6 +4514,11 @@ abUnionControls.addEventListener('change', (event) => {
   }
   if (target instanceof HTMLInputElement && target.dataset.coreCaseAlgorithm2Diagonals !== undefined) {
     coreCaseOptions.algorithm2Diagonals = target.checked;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseStrictTwoLine !== undefined) {
+    coreCaseOptions.strictTwoLineSuperset = target.checked;
     render();
     return;
   }
