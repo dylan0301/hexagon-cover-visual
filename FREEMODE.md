@@ -2,14 +2,20 @@
 
 ## Objects
 
-Free mode represents seven open unit equilateral triangles:
+Free mode always represents six open unit equilateral vertex triangles
 
 \[
-T_C,\ T_0,\ T_1,\dots,T_5.
+T_0,\ T_1,\dots,T_5,
 \]
 
-The triangle \(T_C\) is the center triangle.  Each \(T_i\) is the triangle
-assigned to the hexagon vertex \(V_i\).
+where \(T_i\) is assigned to the hexagon vertex \(V_i\).  Its seventh
+coverer is selected by `C form`:
+
+- `triangle` uses the movable open unit equilateral center triangle \(T_C\),
+- `Cunion` uses the fixed set \(\mathcal C_\cup\) defined below.
+
+Switching forms preserves the inactive form's state.  Switching back to
+`triangle` therefore restores the previous pose and constraints of \(T_C\).
 
 The regular hexagon has center
 
@@ -28,6 +34,61 @@ The midpoint of the half-diagonal \([O,V_i]\) is
 \[
 M_i=\frac12 V_i.
 \]
+
+## Cunion
+
+Let \(r_4=[O,V_4]\), and let \(c(T)\) denote the center of a unit open
+equilateral triangle \(T\).  For a hexagon boundary edge \(e\), say that
+\(T\) overlaps \(e\) when their intersection has positive length.  Define
+\(T\) to be CE1 or CE2 when it overlaps exactly one or exactly two hexagon
+boundary edges, respectively.
+
+For \(k\in\{1,2\}\), the Cunion family is
+
+\[
+\mathcal F_k=
+\left\{
+T:
+O\in T,\quad
+\{i:M_i\in T\}=\{4\},\quad
+T\text{ is CE}k,\quad
+\operatorname{cross}(V_4,c(T))\ge 0
+\right\}.
+\]
+
+Thus every member contains \(O\), contains exactly the midpoint \(M_4\), and
+has its center on the inclusive oriented-left side of the ray from \(O\) to
+\(V_4\).  The last condition is the symmetry normalization for \(r_4\).
+
+The `CE1`, `CE2`, and `both` filters display and use, respectively,
+
+\[
+\mathcal C_\cup^{(1)}=\overline{\bigcup_{T\in\mathcal F_1}T},
+\qquad
+\mathcal C_\cup^{(2)}=\overline{\bigcup_{T\in\mathcal F_2}T},
+\qquad
+\mathcal C_\cup^{(1,2)}=
+\overline{\bigcup_{T\in\mathcal F_1\cup\mathcal F_2}T}.
+\]
+
+The app approximates these closures with 2048 uniformly sampled triangle
+orientations over one \(2\pi/3\) period.  At each orientation it includes all
+feasible center placements, then traces the outer contour with 4096 radial
+samples.  No maximality or Pareto reduction is applied.  The complete planar
+set is drawn: its part inside \(H\) is cyan, its part outside \(H\) is
+translucent neutral gray, and its outer boundary is cyan.  The drawing is not
+clipped to the hexagon.
+
+The contour is a display and mark-selection approximation.  Covering tests do
+not use the filled display path: they apply `strictEps` to the underlying
+sampled triangle half-plane vectors and union the resulting point, segment, or
+arc coverage intervals.  Changing the CE filter changes both the displayed
+set and the active coverer used by validity checks and Vd0.
+
+The sampled model is generated lazily and cached for the page lifetime;
+epsilon-specific filtered coverage is cached after that.  While the model is
+still being built, the \(T_i\) remain movable, but coverage is reported as
+pending and Cunion marks and Vd0 auto-placement are unavailable.
 
 ## Targets
 
@@ -151,21 +212,24 @@ edge-through-point constraints.
 
 ## Base Constraints
 
-The following constraints are always active:
+In `triangle` form, the center constraint is
 
 \[
 O\in T_C,
 \]
 
-and
+and in either C form the vertex-triangle constraints are
 
 \[
 V_i\in T_i,\qquad i=0,\dots,5.
 \]
 
+In `Cunion` form, membership in the fixed Cunion family replaces the movable
+\(T_C\) and its constraints.
+
 Additional midpoint constraints may be enabled in the control panel.
 
-For \(T_C\), any subset of
+For \(T_C\) in `triangle` form, any subset of
 
 \[
 \{M_0,\dots,M_5\}
@@ -183,8 +247,9 @@ are exposed as constraints, with indices taken modulo \(6\).
 
 ## Edge-Through-Point Constraints
 
-Each triangle may have at most one active edge-through-point constraint in the
-current implementation.
+Each movable triangle may have at most one active edge-through-point constraint
+in the current implementation.  Cunion is a fixed coverer and has no such
+constraint.
 
 An edge-through-point constraint has the form:
 
@@ -194,8 +259,8 @@ An edge-through-point constraint has the form:
 
 where \(k\in\{0,1,2\}\), and \(P\) is a named point.
 
-The canvas labels every visible triangle edge with the same index used by this
-constraint:
+The canvas labels every visible movable-triangle edge with the same index used
+by this constraint:
 
 \[
 T:e0,\quad T:e1,\quad T:e2.
@@ -228,6 +293,15 @@ curves.  The current implementation supports labels from one lotus arc and one
 visible triangle edge.  It does not create arc-arc labels or labels between a
 lotus arc and a fixed hexagon/half-diagonal segment.
 
+In `Cunion` form, only the merged outer boundary for the active CE filter is a
+Cunion mark source.  It can be paired with a hexagon edge, a half-diagonal, or
+a visible \(T_i\)-edge.  Internal CE1/CE2 seams, the Cunion boundary paired
+with itself, and Cunion/lotus-arc pairs are not mark sources.  When the chosen
+pair has several intersections, the app selects the one nearest the click on
+the Cunion boundary.  A dynamic mark follows the nearest continuation to its
+previous coordinate as the other source moves; a static Cunion mark freezes at
+its creation coordinate.
+
 If the two selected sources intersect, `d-mark` creates a dynamic label
 (`D1`, `D2`, ...) that stores both source segments and recomputes its coordinate
 whenever the triangles move.  `s-mark` creates a static label (`S1`, `S2`, ...)
@@ -259,6 +333,9 @@ from \(V_i\) along the branch:
 If a selected raw source later becomes invalid or leaves the branch, Vd0 falls
 back to the automatic farthest-uncovered value for that coordinate.
 
+In `Cunion` form, the active CE-filtered Cunion set participates in the
+uncovered-branch calculation in place of \(T_C\).
+
 Vd0 is not available for the Lotus target.  When Lotus is selected, Vd0
 controls are hidden and Vd0 auto-placement is ignored.  Existing Vd0 settings
 are preserved and become visible again when the target is switched back to
@@ -276,10 +353,24 @@ active, the graph panel is hidden entirely:
 
 The right panel instead shows only Free mode controls and the Free JSON state.
 
+In `Cunion` form the \(T_C\) row and the sampling panel are hidden, and the
+`sample` tool is unavailable.  Entering Cunion while sampling changes the tool
+to `move`; if \(T_C\) was selected, \(T_4\) becomes selected.  All non-C
+facilities remain available, including moving and rotating the \(T_i\), their
+fixed/hidden and midpoint settings, edge-through-point constraints, targets,
+point seeds, marks, Vd0, and Free JSON.
+
+A dynamic mark whose source belongs to the inactive C form is retained but
+suspended.  Any edge-through-point constraint that uses it is likewise
+suspended, and a dependent Vd0 placement is paused instead of falling back to
+an automatic raw value.  Reactivating the source form restores these
+dependencies.  Static labels remain usable fixed points while their source
+form is inactive.
+
 Moving a triangle is direct manipulation of its pose.  The app then projects the
 candidate pose back toward the active constraints:
 
-- \(T_C\) must continue to contain \(O\),
+- \(T_C\), when active, must continue to contain \(O\),
 - \(T_i\) must continue to contain \(V_i\),
 - checked midpoint constraints must remain satisfied,
 - any active edge-through-point constraint must remain satisfied.
@@ -299,11 +390,11 @@ all three triangle half-planes by at least \(\varepsilon\), where
 Similarly, a skeleton segment is covered by a triangle only on the subinterval
 that remains after applying the same epsilon margin.  The app computes interval
 coverage on each skeleton segment, merges those intervals over all seven
-triangles, and reports the remaining gaps.
+active coverers, and reports the remaining gaps.
 
 For Lotus, the same strict epsilon margin is applied to each lotus perimeter
 edge and each circular arc.  Arc coverage is computed as exact parameter
-intervals on the arc, then merged over all seven placed triangles.
+intervals on the arc, then merged over all seven active coverers.
 
 This means a point lying exactly on a triangle edge is not treated as covered
 for the strict validity test, even though it is visually on the boundary.
@@ -311,7 +402,7 @@ for the strict validity test, even though it is visually on the boundary.
 ## Validity
 
 In every Free target below, if point seeds exist, every distinct point in every
-seed's D6 orbit must also be covered by at least one of the seven triangles.
+seed's D6 orbit must also be covered by at least one active coverer.
 
 For target \(S\), a free-mode configuration is valid when:
 
@@ -322,20 +413,20 @@ For target \(S_{1/2}\), a free-mode configuration is valid when:
 
 1. all active constraints are satisfied with the strict epsilon margin,
 2. every boundary edge has no uncovered interval, and
-3. \(O,M_0,\dots,M_5\) are each covered by at least one triangle.
+3. \(O,M_0,\dots,M_5\) are each covered by at least one active coverer.
 
 For target \(S_t\), a free-mode configuration is valid when:
 
 1. all active constraints are satisfied with the strict epsilon margin,
 2. every boundary edge has no uncovered interval, and
 3. \(O,M_0,\dots,M_5\) and every \(P_i(t_j)\) are each covered by at least one
-   triangle.
+   active coverer.
 
 For target Benzene, a free-mode configuration is valid when:
 
 1. all active constraints are satisfied with the strict epsilon margin,
 2. every boundary edge and every half-diagonal has no uncovered interval, and
-3. \(B_0,\dots,B_5\) are each covered by at least one triangle.
+3. \(B_0,\dots,B_5\) are each covered by at least one active coverer.
 
 For target Lotus, a free-mode configuration is valid when:
 
@@ -343,12 +434,22 @@ For target Lotus, a free-mode configuration is valid when:
 2. every lotus arc has no uncovered interval, and
 3. every lotus perimeter edge has no uncovered interval.
 
-Lotus coverage is checked geometrically against all seven placed triangles,
-including \(T_C\).  The app does not currently enforce the separate observation
-that a unit equilateral triangle can intersect positive-length portions of at
-most four lotus arcs; that fact is recorded in `MATH.md`.
+Lotus coverage is checked geometrically against the six vertex triangles and
+the active C coverer.  The app does not currently enforce the separate
+observation that a unit equilateral triangle can intersect positive-length
+portions of at most four lotus arcs; that fact is recorded in `MATH.md`.
 
 Fixed triangles remain part of the covering test.  Hidden triangles also remain
 part of the covering test; hiding only removes them from the canvas hit target
 and visual clutter.  Hiding an unfixed triangle automatically fixes it.  If a
 hidden triangle is unfixed, it is shown again.
+
+## Free JSON Compatibility
+
+C forms use Free JSON version 8.  The state stores the selected C form, the
+CE1/CE2/both filter, and the click anchor used to disambiguate a compound
+Cunion-boundary mark.  Free JSON versions 1 through 7 remain loadable and
+default to `triangle` form with the `both` filter.  Loading also sanitizes
+boundary anchors and normalizes a saved `sample` tool or \(T_C\) selection when
+it is incompatible with the active form.  The ordinary, non-Free controller
+snapshot version is unchanged.

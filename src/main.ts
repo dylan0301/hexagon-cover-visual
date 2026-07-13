@@ -1,7 +1,7 @@
 import './style.css';
 import type { Point, ShapeMode, TriangleState } from './types';
 import { canvasToMath, config, mathToCanvas, scaleToCanvas, scaleToMath, setCanvasSize } from './coords';
-import { drawHexagon, HEXAGON_VERTICES } from './hexagon';
+import { drawHexagon, drawHexagonLines, HEXAGON_VERTICES } from './hexagon';
 import {
   computeChainValuesForLocalCs,
   getAdmissibleOrderedSource,
@@ -52,8 +52,10 @@ import {
   describeTarget,
   getSegmentByRef,
   getFreeVd0Status,
+  getFreeVd0SuspensionReason,
   getFreeVd0RawSourceOptions,
   getTriangle,
+  isFreeLabelSuspended,
   lotusComponents,
   midpoint,
   namedPointLabel,
@@ -161,6 +163,11 @@ import {
   type AreaConjQuality,
   type AreaConjResult,
 } from './areaConjecture';
+import {
+  buildCUnionModel,
+  cUnionBoundaryPoints,
+  type CUnionModel,
+} from './cUnion';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -257,6 +264,11 @@ let freeState: FreeState = createDefaultFreeState();
 let freeInitializedFromCurrent = false;
 let currentFreeValidation: FreeValidationResult | null = null;
 let freeInteractionApi: ReturnType<typeof setupFreeInteraction> | null = null;
+let cUnionModel: CUnionModel | null = null;
+let cUnionBuildState: 'idle' | 'building' | 'ready' | 'error' = 'idle';
+let cUnionBuildProgress = 0;
+let cUnionBuildError = '';
+let cUnionRenderPending = false;
 let sampleModeSavedTriangleStates: Partial<Record<FreeTriangleId, { hidden: boolean; fixed: boolean }>> | null = null;
 let currentV0Sample: VSample | RejectedSample | null = null;
 let currentCSample: CSample | RejectedSample | null = null;
@@ -1690,16 +1702,89 @@ function initializeFreeFromCurrentIfNeeded(): void {
   }
   freeState = next;
   freeInitializedFromCurrent = true;
-  refreshLabels(freeState);
+  refreshLabels(freeState, cUnionModel);
 }
 
-function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidationResult): void {
+function traceCanvasPolygon(ctx2d: CanvasRenderingContext2D, points: readonly Point[]): void {
+  if (points.length === 0) return;
+  const first = mathToCanvas(points[0]);
+  ctx2d.moveTo(first.x, first.y);
+  for (let i = 1; i < points.length; i++) {
+    const point = mathToCanvas(points[i]);
+    ctx2d.lineTo(point.x, point.y);
+  }
+  ctx2d.closePath();
+}
+
+function drawCUnionMode(ctx2d: CanvasRenderingContext2D, model: CUnionModel): void {
+  const boundary = cUnionBoundaryPoints(model, freeState.cUnionCeFilter);
+  if (boundary.length < 3) return;
+
   ctx2d.save();
+  ctx2d.beginPath();
+  ctx2d.rect(0, 0, config.canvasSize, config.canvasSize);
+  traceCanvasPolygon(ctx2d, HEXAGON_VERTICES);
+  ctx2d.clip('evenodd');
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.fillStyle = 'rgba(100, 116, 139, 0.16)';
+  ctx2d.fill();
+  ctx2d.restore();
+
+  ctx2d.save();
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, HEXAGON_VERTICES);
+  ctx2d.clip();
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.fillStyle = 'rgba(14, 165, 233, 0.24)';
+  ctx2d.fill();
+  ctx2d.restore();
+
+  drawHexagonLines(ctx2d);
+}
+
+function drawCUnionBoundary(ctx2d: CanvasRenderingContext2D, model: CUnionModel): void {
+  const boundary = cUnionBoundaryPoints(model, freeState.cUnionCeFilter);
+  if (boundary.length < 3) return;
+  ctx2d.save();
+  const boundarySelected = freeState.selectedSegments.some((segment) => segment.kind === 'c-union-boundary');
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.strokeStyle = boundarySelected ? '#facc15' : colorForTriangle('C');
+  ctx2d.lineWidth = boundarySelected ? 5 : 2;
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
+function drawCUnionReference(ctx2d: CanvasRenderingContext2D): void {
+  const origin = mathToCanvas({ x: 0, y: 0 });
+  const vertex = mathToCanvas(HEXAGON_VERTICES[4]);
+  ctx2d.save();
+  ctx2d.beginPath();
+  ctx2d.moveTo(origin.x, origin.y);
+  ctx2d.lineTo(vertex.x, vertex.y);
+  ctx2d.strokeStyle = '#d97706';
+  ctx2d.lineWidth = 2.5;
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
+function drawFreeMode(
+  ctx2d: CanvasRenderingContext2D,
+  validation: FreeValidationResult,
+  cUnionReady: boolean,
+): void {
+  ctx2d.save();
+  const pointFailures = cUnionReady ? validation.pointFailures : [];
+  if (freeState.cForm === 'c-union' && cUnionModel) {
+    drawCUnionMode(ctx2d, cUnionModel);
+  }
   if (freeState.target === 'LOTUS') {
     drawLotusTarget(ctx2d);
   }
   for (const triangle of freeState.triangles) {
-    if (triangle.hidden) {
+    if (triangle.hidden || freeState.cForm === 'c-union' && triangle.id === 'C') {
       continue;
     }
     const vertices = triangleVertices(triangle.center, triangle.angle).map(mathToCanvas);
@@ -1735,15 +1820,25 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
     }
   }
 
-  drawCoverageGaps(ctx2d, validation.segments);
+  if (cUnionReady) {
+    drawCoverageGaps(ctx2d, validation.segments);
+  }
   drawFreeSelectedSegments(ctx2d);
+  if (freeState.cForm === 'c-union' && cUnionModel) {
+    drawCUnionBoundary(ctx2d, cUnionModel);
+  }
+  if (freeState.cForm === 'c-union') {
+    drawCUnionReference(ctx2d);
+  }
 
   ctx2d.font = '12px monospace';
   for (let i = 0; i < 6; i++) {
     const point = mathToCanvas(midpoint(i));
     ctx2d.beginPath();
     ctx2d.arc(point.x, point.y, 4, 0, 2 * Math.PI);
-    ctx2d.fillStyle = validation.pointFailures.includes(`M${i}`) ? '#dc2626' : '#0f172a';
+    ctx2d.fillStyle = i === 4 && freeState.cForm === 'c-union'
+      ? '#d97706'
+      : pointFailures.includes(`M${i}`) ? '#dc2626' : '#0f172a';
     ctx2d.fill();
     ctx2d.fillText(`M${i}`, point.x + 5, point.y - 5);
   }
@@ -1755,7 +1850,7 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
         const point = mathToCanvas(targetTPoint(target, i));
         ctx2d.beginPath();
         ctx2d.arc(point.x, point.y, 6, 0, 2 * Math.PI);
-        ctx2d.fillStyle = validation.pointFailures.includes(label) ? '#dc2626' : '#f97316';
+        ctx2d.fillStyle = pointFailures.includes(label) ? '#dc2626' : '#f97316';
         ctx2d.fill();
         ctx2d.strokeStyle = target.fixed ? '#92400e' : '#7c2d12';
         ctx2d.lineWidth = target.fixed ? 2 : 1.5;
@@ -1771,7 +1866,7 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
       const point = mathToCanvas(benzenePoint(i));
       ctx2d.beginPath();
       ctx2d.arc(point.x, point.y, 5, 0, 2 * Math.PI);
-      ctx2d.fillStyle = validation.pointFailures.includes(`B${i}`) ? '#dc2626' : '#7c3aed';
+      ctx2d.fillStyle = pointFailures.includes(`B${i}`) ? '#dc2626' : '#7c3aed';
       ctx2d.fill();
       ctx2d.strokeStyle = '#4c1d95';
       ctx2d.lineWidth = 1.5;
@@ -1781,10 +1876,10 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
     }
   }
 
-  drawSymmetricPoints(ctx2d, new Set(validation.pointFailures));
+  drawSymmetricPoints(ctx2d, new Set(pointFailures));
 
   for (const label of freeState.labels) {
-    if (!label.point) {
+    if (!label.point || isFreeLabelSuspended(freeState, label, cUnionModel)) {
       continue;
     }
     const point = mathToCanvas(label.point);
@@ -1805,7 +1900,10 @@ function drawFreeSelectedSegments(ctx2d: CanvasRenderingContext2D): void {
   ctx2d.save();
   ctx2d.lineCap = 'round';
   for (const selected of freeState.selectedSegments) {
-    const segment = getSegmentByRef(freeState, selected);
+    if (selected.kind === 'c-union-boundary') {
+      continue;
+    }
+    const segment = getSegmentByRef(freeState, selected, cUnionModel);
     if (!segment) {
       continue;
     }
@@ -1850,7 +1948,7 @@ function namedPointOptions(selected: FreeNamedPointRef | null): string {
 function vd0RawSourceOptions(triangleId: FreeTriangleId, coordinate: FreeVd0Coordinate): string {
   const triangle = getTriangle(freeState, triangleId);
   const selected = triangle.vd0.rawSources?.[coordinate] ?? null;
-  const options = getFreeVd0RawSourceOptions(freeState, triangle, coordinate);
+  const options = getFreeVd0RawSourceOptions(freeState, triangle, coordinate, cUnionModel);
   const selectedIsValid = options.some((option) => sameNamedPointRef(option.ref, selected));
   const autoSelected = selected === null || selected === undefined;
   const optionHtml = options.map((option) => {
@@ -1917,7 +2015,7 @@ function clampInteger(value: string | undefined, min: number, max: number): numb
 }
 
 function formatFreeSnapshot(): string {
-  return JSON.stringify({ ...freeState, version: 7 }, null, 2);
+  return JSON.stringify({ ...freeState, version: 8 }, null, 2);
 }
 
 type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
@@ -1933,6 +2031,15 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
   const ref = value as Partial<FreeSegmentRef>;
   if (typeof ref.index !== 'number' || !Number.isInteger(ref.index)) return false;
   if (ref.kind === 'hex-edge' || ref.kind === 'half-diagonal' || ref.kind === 'lotus-arc') return true;
+  if (ref.kind === 'c-union-boundary') {
+    const anchorPoint = (ref as { anchorPoint?: unknown }).anchorPoint;
+    return ref.index === 0 && (
+      anchorPoint === undefined ||
+      !!anchorPoint && typeof anchorPoint === 'object' &&
+      typeof (anchorPoint as Point).x === 'number' && Number.isFinite((anchorPoint as Point).x) &&
+      typeof (anchorPoint as Point).y === 'number' && Number.isFinite((anchorPoint as Point).y)
+    );
+  }
   return ref.kind === 'triangle-edge' && (
     ref.triangleId === 'C' ||
     ref.triangleId === 'V0' ||
@@ -1942,6 +2049,21 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
     ref.triangleId === 'V4' ||
     ref.triangleId === 'V5'
   );
+}
+
+function sanitizeCUnionBoundaryAnchor(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const ref = value as { kind?: unknown; anchorPoint?: unknown };
+  if (ref.kind !== 'c-union-boundary' || ref.anchorPoint === undefined) return;
+  const point = ref.anchorPoint;
+  if (
+    !point ||
+    typeof point !== 'object' ||
+    typeof (point as Point).x !== 'number' || !Number.isFinite((point as Point).x) ||
+    typeof (point as Point).y !== 'number' || !Number.isFinite((point as Point).y)
+  ) {
+    delete ref.anchorPoint;
+  }
 }
 
 function isFreeTool(value: unknown): value is FreeTool {
@@ -1961,7 +2083,24 @@ function isFixedFreeSegmentRef(value: unknown): value is FreeSegmentRef {
 }
 
 function isStaticFreeLabelRef(value: unknown): boolean {
-  return isFixedFreeSegmentRef(value) || (isFreeSegmentRef(value) && value.kind === 'lotus-arc');
+  return isFixedFreeSegmentRef(value) || (
+    isFreeSegmentRef(value) && (value.kind === 'lotus-arc' || value.kind === 'c-union-boundary')
+  );
+}
+
+function isAllowedCUnionLabelPair(
+  first: FreeSegmentRef | null | undefined,
+  second: FreeSegmentRef | null | undefined,
+): boolean {
+  const boundaryCount = (first?.kind === 'c-union-boundary' ? 1 : 0)
+    + (second?.kind === 'c-union-boundary' ? 1 : 0);
+  if (boundaryCount === 0) return true;
+  if (boundaryCount !== 1) return false;
+  const other = first?.kind === 'c-union-boundary' ? second : first;
+  return other == null
+    || other.kind === 'hex-edge'
+    || other.kind === 'half-diagonal'
+    || (other.kind === 'triangle-edge' && other.triangleId !== 'C');
 }
 
 function isFreeLabel(value: unknown): value is FreeLabel {
@@ -1976,7 +2115,9 @@ function isFreeLabel(value: unknown): value is FreeLabel {
     return false;
   }
   if (label.mode === 'dynamic') {
-    return isFreeSegmentRef(label.first) && isFreeSegmentRef(label.second);
+    return isFreeSegmentRef(label.first)
+      && isFreeSegmentRef(label.second)
+      && isAllowedCUnionLabelPair(label.first, label.second);
   }
   if (label.point === null) return false;
   const first = label.first;
@@ -1989,8 +2130,9 @@ function isFreeLabel(value: unknown): value is FreeLabel {
   ) {
     return true;
   }
-  return (first === null || first === undefined || isStaticFreeLabelRef(first)) &&
-    (second === null || second === undefined || isStaticFreeLabelRef(second));
+  const refsValid = (first === null || first === undefined || isStaticFreeLabelRef(first))
+    && (second === null || second === undefined || isStaticFreeLabelRef(second));
+  return refsValid && isAllowedCUnionLabelPair(first, second);
 }
 
 function setFreeStateStatus(text: string, isError = false): void {
@@ -2065,7 +2207,7 @@ function normalizeTargetTRef(ref: FreeNamedPointRef | undefined): void {
 function loadFreeSnapshot(raw: string): void {
   const parsed = JSON.parse(raw) as RawFreeSnapshot;
   if (
-    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7) ||
+    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7 && parsed.version !== 8) ||
     !Array.isArray(parsed.triangles) ||
     parsed.triangles.length !== 7
   ) {
@@ -2077,6 +2219,17 @@ function loadFreeSnapshot(raw: string): void {
   if (parsed.tool !== undefined && !isFreeTool(parsed.tool)) {
     throw new Error('Invalid free snapshot tool.');
   }
+  if (parsed.cForm !== undefined && parsed.cForm !== 'triangle' && parsed.cForm !== 'c-union') {
+    throw new Error('Invalid free snapshot C form.');
+  }
+  if (
+    parsed.cUnionCeFilter !== undefined &&
+    parsed.cUnionCeFilter !== 'ce1' &&
+    parsed.cUnionCeFilter !== 'ce2' &&
+    parsed.cUnionCeFilter !== 'both'
+  ) {
+    throw new Error('Invalid free snapshot Cunion filter.');
+  }
   if (parsed.targetT !== undefined && (typeof parsed.targetT !== 'number' || !Number.isFinite(parsed.targetT))) {
     throw new Error('Invalid free snapshot t.');
   }
@@ -2087,6 +2240,12 @@ function loadFreeSnapshot(raw: string): void {
     throw new Error('Invalid free snapshot labels.');
   }
   const labels = Array.isArray(parsed.labels) ? parsed.labels : [];
+  for (const label of labels) {
+    if (!label || typeof label !== 'object') continue;
+    const refs = label as { first?: unknown; second?: unknown };
+    sanitizeCUnionBoundaryAnchor(refs.first);
+    sanitizeCUnionBoundaryAnchor(refs.second);
+  }
   if (!labels.every(isFreeLabel)) {
     throw new Error('Invalid free snapshot labels.');
   }
@@ -2117,7 +2276,7 @@ function loadFreeSnapshot(raw: string): void {
     selectedSegments: [],
     pointSeeds,
     selectedPointSeedId,
-    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 || parsed.version === 7 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
+    sampling: parsed.version >= 4 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
   } as FreeState;
   delete (freeState as RawFreeSnapshot).targetT;
   delete (freeState as RawFreeSnapshot).targetTFixed;
@@ -2127,9 +2286,14 @@ function loadFreeSnapshot(raw: string): void {
       normalizeTargetTRef(triangle.vd0.rawSources?.[coordinate]);
     }
   }
+  if (freeState.cForm === 'c-union') {
+    if (freeState.tool === 'sample') freeState.tool = 'move';
+    if (freeState.selectedTriangleId === 'C') freeState.selectedTriangleId = 'V4';
+    ensureCUnionModel();
+  }
   sampleModeSavedTriangleStates = null;
   freeInitializedFromCurrent = true;
-  refreshLabels(freeState);
+  refreshLabels(freeState, cUnionModel);
 }
 
 function syncFreeStrictEps(projectConstraints = false): void {
@@ -2140,10 +2304,43 @@ function syncFreeStrictEps(projectConstraints = false): void {
   freeState.strictEps = nextStrictEps;
   if (projectConstraints) {
     for (const triangle of freeState.triangles) {
-      projectTriangleToConstraints(freeState, triangle);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
     }
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
   }
+}
+
+function scheduleCUnionRender(): void {
+  if (cUnionRenderPending) return;
+  cUnionRenderPending = true;
+  requestAnimationFrame(() => {
+    cUnionRenderPending = false;
+    render();
+  });
+}
+
+function ensureCUnionModel(): void {
+  if (cUnionBuildState !== 'idle') return;
+  cUnionBuildState = 'building';
+  cUnionBuildProgress = 0;
+  void buildCUnionModel((progress) => {
+    cUnionBuildProgress = Math.max(0, Math.min(1, progress));
+    scheduleCUnionRender();
+  }).then((model) => {
+    cUnionModel = model;
+    cUnionBuildState = 'ready';
+    cUnionBuildProgress = 1;
+    cUnionBuildError = '';
+    if (freeState.cForm === 'c-union') {
+      refreshLabels(freeState, model);
+      autoPlaceAllFreeVd0FromControls();
+    }
+    scheduleCUnionRender();
+  }).catch((error: unknown) => {
+    cUnionBuildState = 'error';
+    cUnionBuildError = error instanceof Error ? error.message : 'Cunion construction failed.';
+    scheduleCUnionRender();
+  });
 }
 
 function samplingStore(): SamplingStore {
@@ -2208,6 +2405,40 @@ function setFreeTool(nextTool: FreeTool): void {
   }
 }
 
+function setFreeCForm(nextForm: FreeState['cForm']): void {
+  if (freeState.cForm === nextForm) return;
+  if (freeState.tool === 'sample') {
+    leaveSampleMode();
+    freeState.tool = 'move';
+  }
+  freeState.cForm = nextForm;
+  freeState.selectedSegments = [];
+  if (nextForm === 'c-union' && freeState.selectedTriangleId === 'C') {
+    freeState.selectedTriangleId = 'V4';
+  }
+  freeState.status = nextForm === 'c-union'
+    ? 'Cunion form: move or constrain V triangles.'
+    : 'Triangle form: move or constrain C and V triangles.';
+  refreshLabels(freeState, cUnionModel);
+  if (nextForm === 'c-union') {
+    ensureCUnionModel();
+  }
+  if (nextForm === 'triangle' || cUnionModel) {
+    autoPlaceAllFreeVd0FromControls();
+  }
+}
+
+function setCUnionFilter(filter: FreeState['cUnionCeFilter']): void {
+  if (freeState.cUnionCeFilter === filter) return;
+  freeState.cUnionCeFilter = filter;
+  freeState.selectedSegments = [];
+  freeState.status = `Cunion filter: ${filter.toUpperCase()}.`;
+  refreshLabels(freeState, cUnionModel);
+  if (cUnionModel) {
+    autoPlaceAllFreeVd0FromControls();
+  }
+}
+
 function captureCurrentSample(): void {
   if (freeState.tool !== 'sample') return;
   enterSampleMode();
@@ -2242,11 +2473,14 @@ function autoPlaceAllFreeVd0FromControls(): void {
   if (!freeState.triangles.some((triangle) => triangle.id !== 'C' && triangle.vd0.enabled)) {
     return;
   }
-  const result = autoPlaceAllFreeVd0Triangles(freeState);
-  refreshLabels(freeState);
+  if (freeState.cForm === 'c-union' && !cUnionModel) {
+    return;
+  }
+  const result = autoPlaceAllFreeVd0Triangles(freeState, cUnionModel);
+  refreshLabels(freeState, cUnionModel);
   const failureText = result.ok ? '' : result.failedIds.map((id) => {
     const triangle = getTriangle(freeState, id);
-    const status = getFreeVd0Status(freeState, triangle);
+    const status = getFreeVd0Status(freeState, triangle, cUnionModel);
     const maxLabel = triangle.vd0.mode === 'max-c' ? 'max c' : triangle.vd0.mode === 'max-a' ? 'max a' : 'max b';
     return status
       ? `${id} raw=(${status.raw.a.toFixed(3)}, ${status.raw.b.toFixed(3)}, ${status.raw.c.toFixed(3)}), ${maxLabel}=${status.max.toFixed(3)}`
@@ -2499,7 +2733,15 @@ function clearTargetTReferences(targetTId: string): void {
   }
 }
 
-function renderFreePanel(validation: FreeValidationResult): void {
+function renderFreePanel(validation: FreeValidationResult, cUnionReady: boolean): void {
+  const cFormControls = (['triangle', 'c-union'] as const).map((form) =>
+    `<button type="button" class="free-button${freeState.cForm === form ? ' is-active' : ''}" data-free-c-form="${form}">${form === 'c-union' ? 'Cunion' : 'triangle'}</button>`,
+  ).join('');
+  const cUnionFilterControls = freeState.cForm === 'c-union'
+    ? (['ce1', 'ce2', 'both'] as const).map((filter) =>
+      `<button type="button" class="free-button${freeState.cUnionCeFilter === filter ? ' is-active' : ''}" data-c-union-filter="${filter}">${filter.toUpperCase()}</button>`,
+    ).join('')
+    : '';
   const targetButtons = (['S_HALF', 'S_T', 'S', 'BENZENE', 'LOTUS'] as FreeTarget[]).map((target) =>
     `<button type="button" class="free-button${freeState.target === target ? ' is-active' : ''}" data-free-target="${target}">${describeTarget(target)}</button>`,
   ).join('');
@@ -2515,7 +2757,10 @@ function renderFreePanel(validation: FreeValidationResult): void {
         </span>
       `).join('')}`
     : '';
-  const toolButtons = (['move', 'd-mark', 's-mark', 'sample', 'point'] as FreeTool[]).map((tool) =>
+  const freeTools: FreeTool[] = freeState.cForm === 'c-union'
+    ? ['move', 'd-mark', 's-mark', 'point']
+    : ['move', 'd-mark', 's-mark', 'sample', 'point'];
+  const toolButtons = freeTools.map((tool) =>
     `<button type="button" class="free-button${freeState.tool === tool ? ' is-active' : ''}" data-free-tool="${tool}">${tool}</button>`,
   ).join('');
   const pointControls = `
@@ -2527,31 +2772,39 @@ function renderFreePanel(validation: FreeValidationResult): void {
     </div>`;
   const statuses = new Map(validation.constraintStatuses.map((status) => [status.triangleId, status]));
 
-  const triangleRows = freeState.triangles.map((triangle) => {
+  const triangleRows = freeState.triangles.filter((triangle) =>
+    freeState.cForm === 'triangle' || triangle.id !== 'C',
+  ).map((triangle) => {
     const status = statuses.get(triangle.id);
     const midpoints = allowedMidpointIndices(triangle.id).map((index) =>
       `<label><input type="checkbox" data-midpoint="${triangle.id}:${index}"${triangle.midpointConstraints[index] ? ' checked' : ''}/>M${index}</label>`,
     ).join('');
-    const vd0Status = getFreeVd0Status(freeState, triangle);
+    const vd0Unavailable = freeState.cForm === 'c-union' && !cUnionReady;
+    const vd0Status = vd0Unavailable ? null : getFreeVd0Status(freeState, triangle, cUnionModel);
+    const vd0SuspensionReason = vd0Unavailable && triangle.vd0.enabled
+      ? 'Vd0 unavailable until Cunion is ready.'
+      : getFreeVd0SuspensionReason(freeState, triangle, cUnionModel);
     const vd0MaxLabel = triangle.vd0.mode === 'max-c' ? 'max c' : triangle.vd0.mode === 'max-a' ? 'max a' : 'max b';
     const vd0RawControls = (['a', 'b', 'c'] as FreeVd0Coordinate[]).map((coordinate) => `
       <label>${coordinate}
-        <select data-vd0-raw-source="${triangle.id}:${coordinate}"${triangle.vd0.enabled ? '' : ' disabled'}>
+        <select data-vd0-raw-source="${triangle.id}:${coordinate}"${triangle.vd0.enabled && !vd0Unavailable ? '' : ' disabled'}>
           ${vd0RawSourceOptions(triangle.id, coordinate)}
         </select>
       </label>
     `).join('');
     const vd0Controls = triangle.id === 'C' || freeState.target === 'LOTUS' ? '' : `
-      <label><input type="checkbox" data-vd0-enabled="${triangle.id}"${triangle.vd0.enabled ? ' checked' : ''}/>Vd0</label>
+      <label><input type="checkbox" data-vd0-enabled="${triangle.id}"${triangle.vd0.enabled ? ' checked' : ''}${vd0Unavailable ? ' disabled' : ''}/>Vd0</label>
       <label>Vd0 mode
-        <select data-vd0-mode="${triangle.id}"${triangle.vd0.enabled ? '' : ' disabled'}>
+        <select data-vd0-mode="${triangle.id}"${triangle.vd0.enabled && !vd0Unavailable ? '' : ' disabled'}>
           <option value="max-c"${triangle.vd0.mode === 'max-c' ? ' selected' : ''}>max c from a,b</option>
           <option value="max-a"${triangle.vd0.mode === 'max-a' ? ' selected' : ''}>max a from b,c</option>
           <option value="max-b"${triangle.vd0.mode === 'max-b' ? ' selected' : ''}>max b from c,a</option>
         </select>
       </label>
       ${vd0RawControls}
-      ${vd0Status ? `<span class="free-small-status">${formatVd0RawStatus(vd0Status, vd0MaxLabel)}</span>` : ''}`;
+      ${vd0SuspensionReason
+        ? `<span class="free-small-status">${escapeHtml(vd0SuspensionReason)}</span>`
+        : vd0Status ? `<span class="free-small-status">${formatVd0RawStatus(vd0Status, vd0MaxLabel)}</span>` : ''}`;
     const edge = triangle.edgePointConstraint;
     const manualPoint = edge?.point.kind === 'manual' ? edge.point.manualPoint : null;
     const edgeControls = `
@@ -2583,16 +2836,22 @@ function renderFreePanel(validation: FreeValidationResult): void {
   }).join('');
 
   const labelRows = freeState.labels.map((label) =>
-    `<div class="free-label-row">${label.name}: ${label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} <button type="button" class="free-button" data-delete-label="${label.id}">delete</button></div>`,
+    `<div class="free-label-row">${label.name}: ${isFreeLabelSuspended(freeState, label, cUnionModel) ? 'suspended' : label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} <button type="button" class="free-button" data-delete-label="${label.id}">delete</button></div>`,
   ).join('');
 
-  freeStatus.textContent = summarizeFreeValidation(validation);
-  freeStatus.style.color = validation.coverageOk && validation.constraintsOk ? '#047857' : '#b91c1c';
+  const cUnionPending = freeState.cForm === 'c-union' && !cUnionReady;
+  freeStatus.textContent = cUnionPending
+    ? cUnionBuildState === 'error' ? `Cunion error: ${cUnionBuildError}` : `Building Cunion ${Math.round(cUnionBuildProgress * 100)}%`
+    : summarizeFreeValidation(validation);
+  freeStatus.style.color = cUnionPending
+    ? cUnionBuildState === 'error' ? '#b91c1c' : '#475569'
+    : validation.coverageOk && validation.constraintsOk ? '#047857' : '#b91c1c';
   freeControls.innerHTML = `
+    <div class="free-toolbar">C form ${cFormControls}${freeState.cForm === 'c-union' ? ` CE filter ${cUnionFilterControls}` : ''}</div>
     <div class="free-toolbar">target ${targetButtons}${targetTControls}</div>
     <div class="free-toolbar">tool ${toolButtons}</div>
     ${pointControls}
-    ${renderSamplingPanel()}
+    ${freeState.cForm === 'triangle' ? renderSamplingPanel() : ''}
     <div class="free-row"><span class="status-reserve">${freeState.status}</span></div>
     ${triangleRows}
     <div class="free-row"><strong>labels</strong></div>
@@ -3574,24 +3833,33 @@ function render(): void {
   if (shapeMode === 'free') {
     initializeFreeFromCurrentIfNeeded();
     syncFreeStrictEps();
-    captureCurrentSample();
-    refreshLabels(freeState);
-    currentFreeValidation = validateFreeState(freeState);
+    if (freeState.cForm === 'c-union') {
+      ensureCUnionModel();
+    } else {
+      captureCurrentSample();
+    }
+    const cUnionReady = freeState.cForm !== 'c-union' || cUnionModel !== null;
+    refreshLabels(freeState, cUnionModel);
+    currentFreeValidation = validateFreeState(freeState, cUnionModel);
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    drawFreeMode(ctx, currentFreeValidation);
+    drawFreeMode(ctx, currentFreeValidation, cUnionReady);
 
-    gammaValues.textContent = 'free mode: seven independent unit triangles';
+    gammaValues.textContent = freeState.cForm === 'c-union'
+      ? `free mode: Cunion (${freeState.cUnionCeFilter}) + six V triangles`
+      : 'free mode: seven independent unit triangles';
     localCBounds.textContent = freeState.target === 'S_T'
       ? `target = ${describeTarget(freeState.target)}, ${freeState.targetTPoints.map((target) => `${target.id}=${target.t.toFixed(3)}`).join(', ')}`
       : `target = ${describeTarget(freeState.target)}`;
-    localCValues.textContent = `selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`;
+    localCValues.textContent = freeState.cForm === 'c-union'
+      ? `${cUnionReady ? 'sampled closure: 2048 orientations / 4096 rays' : `Cunion ${cUnionBuildState}`}; selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`
+      : `selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`;
     ceStatus.textContent = 'CE/g-chain inactive in Free mode';
     ceChainStatus.textContent = 'Free mode uses direct covering checks';
     coverOverlayStatus.textContent = 'Free mode owns triangle overlay';
     regionRenderer.render();
-    renderFreePanel(currentFreeValidation);
+    renderFreePanel(currentFreeValidation, cUnionReady);
     syncControllerSnapshot();
     return;
   }
@@ -4026,6 +4294,24 @@ controllerStateLoadButton.addEventListener('click', () => {
 
 freeControls.addEventListener('click', (event) => {
   const target = event.target as HTMLElement;
+  const cFormButton = target.closest<HTMLButtonElement>('[data-free-c-form]');
+  if (cFormButton) {
+    const form = cFormButton.dataset.freeCForm;
+    if (form === 'triangle' || form === 'c-union') {
+      setFreeCForm(form);
+      render();
+    }
+    return;
+  }
+  const cUnionFilterButton = target.closest<HTMLButtonElement>('[data-c-union-filter]');
+  if (cUnionFilterButton) {
+    const filter = cUnionFilterButton.dataset.cUnionFilter;
+    if (filter === 'ce1' || filter === 'ce2' || filter === 'both') {
+      setCUnionFilter(filter);
+      render();
+    }
+    return;
+  }
   const targetButton = target.closest<HTMLButtonElement>('[data-free-target]');
   if (targetButton) {
     freeState.target = targetButton.dataset.freeTarget as FreeTarget;
@@ -4063,7 +4349,7 @@ freeControls.addEventListener('click', (event) => {
   if (addTargetTButton) {
     freeState.targetTPoints.push({ id: nextTargetTId(), t: DEFAULT_TARGET_T, fixed: false });
     freeState.status = 'Added S_t point position.';
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -4074,7 +4360,7 @@ freeControls.addEventListener('click', (event) => {
       freeState.targetTPoints = freeState.targetTPoints.filter((candidate) => candidate.id !== id);
       clearTargetTReferences(id);
       freeState.status = `Deleted ${id}.`;
-      refreshLabels(freeState);
+      refreshLabels(freeState, cUnionModel);
       render();
     }
     return;
@@ -4101,7 +4387,7 @@ freeControls.addEventListener('click', (event) => {
       }
     }
     freeState.status = `Deleted ${id}.`;
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
   }
 });
@@ -4128,7 +4414,7 @@ freeControls.addEventListener('change', (event) => {
     const value = Number((target as HTMLInputElement).value);
     if (point && Number.isFinite(value)) {
       point.t = clamp01(value);
-      refreshLabels(freeState);
+      refreshLabels(freeState, cUnionModel);
     }
     render();
     return;
@@ -4159,8 +4445,8 @@ freeControls.addEventListener('change', (event) => {
     const triangle = getTriangle(freeState, id as FreeTriangleId);
     const index = clampInteger(rawIndex, 0, 5);
     triangle.midpointConstraints[index] = (target as HTMLInputElement).checked;
-    projectTriangleToConstraints(freeState, triangle);
-    refreshLabels(freeState);
+    projectTriangleToConstraints(freeState, triangle, cUnionModel);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -4220,9 +4506,9 @@ freeControls.addEventListener('change', (event) => {
         edgeIndex: clampInteger(target.value, 0, 2),
         point: triangle.edgePointConstraint?.point ?? { kind: 'O' },
       };
-      projectTriangleToConstraints(freeState, triangle);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
     }
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -4235,8 +4521,8 @@ freeControls.addEventListener('change', (event) => {
         edgeIndex: triangle.edgePointConstraint?.edgeIndex ?? 0,
         point,
       };
-      projectTriangleToConstraints(freeState, triangle);
-      refreshLabels(freeState);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
+      refreshLabels(freeState, cUnionModel);
       render();
     }
     return;
@@ -4256,8 +4542,8 @@ freeControls.addEventListener('change', (event) => {
     triangle.edgePointConstraint.point.manualPoint = manualXTarget
       ? { x: nextValue, y: current.y }
       : { x: current.x, y: nextValue };
-    projectTriangleToConstraints(freeState, triangle);
-    refreshLabels(freeState);
+    projectTriangleToConstraints(freeState, triangle, cUnionModel);
+    refreshLabels(freeState, cUnionModel);
     render();
   }
 });
@@ -4833,7 +5119,7 @@ setupAbUnionInteraction(
 );
 setupCoreCaseIntervalPointInteraction();
 
-freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => {
+freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => cUnionModel, () => {
   if (freeState.tool !== 'sample') {
     autoPlaceAllFreeVd0FromControls();
   }

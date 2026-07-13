@@ -3,6 +3,15 @@ import { HEXAGON_VERTICES } from './hexagon';
 import { fitTriangle, type CoverTriangle } from './cover';
 import { buildSymmetricPointTargets } from './symmetricPoints';
 import {
+  cUnionBoundaryPoints,
+  cUnionContainsPoint,
+  cUnionIntervalsOnArc,
+  cUnionIntervalsOnSegment,
+  getCUnionCoverage,
+  type CUnionCoverage,
+  type CUnionModel,
+} from './cUnion';
+import {
   type FreeConstraintStatus,
   type FreeLabel,
   type FreeNamedPointRef,
@@ -99,6 +108,8 @@ export function createDefaultFreeState(): FreeState {
   ];
 
   return {
+    cForm: 'triangle',
+    cUnionCeFilter: 'both',
     target: 'S_HALF',
     targetTPoints: createDefaultTargetTPoints(),
     tool: 'move',
@@ -119,7 +130,49 @@ function isFixedSegmentRef(ref: FreeSegmentRef): boolean {
 }
 
 function shouldKeepStaticSegmentRef(ref: FreeSegmentRef): boolean {
-  return isFixedSegmentRef(ref) || ref.kind === 'lotus-arc';
+  return isFixedSegmentRef(ref) || ref.kind === 'lotus-arc' || ref.kind === 'c-union-boundary';
+}
+
+export function isFreeSegmentRefActive(state: FreeState, ref: FreeSegmentRef): boolean {
+  if (ref.kind === 'c-union-boundary') {
+    return state.cForm === 'c-union';
+  }
+  if (ref.kind === 'triangle-edge' && ref.triangleId === 'C') {
+    return state.cForm === 'triangle';
+  }
+  return true;
+}
+
+function labelHasUnavailableSource(
+  state: FreeState,
+  label: FreeLabel,
+  cUnionModel?: CUnionModel | null,
+): boolean {
+  const refs = [label.first, label.second];
+  return refs.some((ref) =>
+    ref !== null && (
+      !isFreeSegmentRefActive(state, ref)
+      || (ref.kind === 'c-union-boundary' && state.cForm === 'c-union' && !cUnionModel)
+    ),
+  );
+}
+
+export function isFreeLabelSuspended(
+  state: FreeState,
+  label: FreeLabel,
+  cUnionModel?: CUnionModel | null,
+): boolean {
+  return label.mode === 'dynamic' && labelHasUnavailableSource(state, label, cUnionModel);
+}
+
+export function isFreeNamedPointRefSuspended(
+  state: FreeState,
+  ref: FreeNamedPointRef,
+  cUnionModel?: CUnionModel | null,
+): boolean {
+  if (ref.kind !== 'label') return false;
+  const label = state.labels.find((candidate) => candidate.id === ref.labelId);
+  return label ? isFreeLabelSuspended(state, label, cUnionModel) : false;
 }
 
 export function colorForTriangle(id: FreeTriangleId): string {
@@ -192,7 +245,11 @@ export function namedPointLabel(ref: FreeNamedPointRef): string {
   return 'manual';
 }
 
-export function resolveNamedPoint(state: FreeState, ref: FreeNamedPointRef): Point | null {
+export function resolveNamedPoint(
+  state: FreeState,
+  ref: FreeNamedPointRef,
+  cUnionModel?: CUnionModel | null,
+): Point | null {
   if (ref.kind === 'O') return { x: 0, y: 0 };
   if (ref.kind === 'M') return midpoint(ref.index ?? 0);
   if (ref.kind === 'P') return getTargetTPoint(state, ref.targetTId, ref.index ?? 0);
@@ -200,11 +257,19 @@ export function resolveNamedPoint(state: FreeState, ref: FreeNamedPointRef): Poi
   if (ref.kind === 'V') return HEXAGON_VERTICES[ref.index ?? 0] ?? null;
   if (ref.kind === 'manual') return ref.manualPoint ?? null;
   const label = state.labels.find((candidate) => candidate.id === ref.labelId);
+  if (label && isFreeLabelSuspended(state, label, cUnionModel)) return null;
   return label?.point ?? null;
 }
 
-export function getRequiredPoints(state: FreeState, triangle: FreeTriangleState): Array<{ point: Point; label: string }> {
+export function getRequiredPoints(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): Array<{ point: Point; label: string }> {
   const points: Array<{ point: Point; label: string }> = [];
+  if (triangle.id === 'C' && state.cForm !== 'triangle') {
+    return points;
+  }
   if (triangle.id === 'C') {
     points.push({ point: { x: 0, y: 0 }, label: 'O' });
   } else {
@@ -219,7 +284,8 @@ export function getRequiredPoints(state: FreeState, triangle: FreeTriangleState)
   });
 
   const target = triangle.edgePointConstraint
-    ? resolveNamedPoint(state, triangle.edgePointConstraint.point)
+    && !isFreeNamedPointRefSuspended(state, triangle.edgePointConstraint.point, cUnionModel)
+    ? resolveNamedPoint(state, triangle.edgePointConstraint.point, cUnionModel)
     : null;
   if (target) {
     points.push({ point: target, label: namedPointLabel(triangle.edgePointConstraint!.point) });
@@ -257,9 +323,17 @@ function closestAngle(current: number, candidates: number[]): number {
   return best;
 }
 
-export function projectTriangleToConstraints(state: FreeState, triangle: FreeTriangleState): void {
-  const edgeConstraint = triangle.edgePointConstraint;
-  const target = edgeConstraint ? resolveNamedPoint(state, edgeConstraint.point) : null;
+export function projectTriangleToConstraints(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): void {
+  if (triangle.id === 'C' && state.cForm !== 'triangle') return;
+  const edgeConstraint = triangle.edgePointConstraint
+    && !isFreeNamedPointRefSuspended(state, triangle.edgePointConstraint.point, cUnionModel)
+    ? triangle.edgePointConstraint
+    : null;
+  const target = edgeConstraint ? resolveNamedPoint(state, edgeConstraint.point, cUnionModel) : null;
   if (edgeConstraint && target) {
     const q = { x: target.x - triangle.center.x, y: target.y - triangle.center.y };
     const length = Math.hypot(q.x, q.y);
@@ -273,7 +347,7 @@ export function projectTriangleToConstraints(state: FreeState, triangle: FreeTri
 
   for (let iter = 0; iter < CONSTRAINT_ITERS; iter++) {
     let changed = false;
-    const required = getRequiredPoints(state, triangle);
+    const required = getRequiredPoints(state, triangle, cUnionModel);
     const relVertices = triangleVertices({ x: 0, y: 0 }, triangle.angle);
     for (const { point } of required) {
       for (let edgeIndex = 0; edgeIndex < 3; edgeIndex++) {
@@ -513,16 +587,67 @@ function maxClassicalCoordinate(mode: FreeVd0Mode, a: number, b: number, c: numb
   return Math.max(0, Math.min(1, lo));
 }
 
+function activeTriangleCoverers(state: FreeState, excludedId?: FreeTriangleId): FreeTriangleState[] {
+  return state.triangles.filter((triangle) =>
+    triangle.id !== excludedId && (triangle.id !== 'C' || state.cForm === 'triangle'),
+  );
+}
+
+function activeCUnionCoverage(state: FreeState, cUnionModel?: CUnionModel | null): CUnionCoverage | null {
+  if (state.cForm !== 'c-union' || !cUnionModel) return null;
+  return getCUnionCoverage(cUnionModel, state.cUnionCeFilter, state.strictEps);
+}
+
+function activeIntervalsOnSegment(
+  state: FreeState,
+  cUnionCoverage: CUnionCoverage | null,
+  start: Point,
+  end: Point,
+  excludedId?: FreeTriangleId,
+): Array<[number, number]> {
+  const intervals = activeTriangleCoverers(state, excludedId)
+    .map((triangle) => strictIntervalOnSegment(start, end, triangle, state.strictEps));
+  if (cUnionCoverage) {
+    intervals.push(...cUnionIntervalsOnSegment(cUnionCoverage, start, end));
+  }
+  return mergeIntervals(intervals);
+}
+
+function activeIntervalsOnArc(
+  state: FreeState,
+  cUnionCoverage: CUnionCoverage | null,
+  arc: NonNullable<FreeSegment['arc']>,
+): Array<[number, number]> {
+  const intervals = activeTriangleCoverers(state)
+    .flatMap((triangle) => strictIntervalOnArc(arc, triangle, state.strictEps));
+  if (cUnionCoverage) {
+    intervals.push(...cUnionIntervalsOnArc(cUnionCoverage, arc));
+  }
+  return mergeIntervals(intervals);
+}
+
+function activeCoverersContainPoint(
+  state: FreeState,
+  cUnionCoverage: CUnionCoverage | null,
+  point: Point,
+): boolean {
+  return activeTriangleCoverers(state).some((triangle) => strictPointInTriangle(point, triangle, state.strictEps))
+    || (cUnionCoverage !== null && cUnionContainsPoint(cUnionCoverage, point));
+}
+
 function farthestGapEndExcludingTriangle(
   state: FreeState,
   excludedId: FreeTriangleId,
   start: Point,
   end: Point,
+  cUnionModel?: CUnionModel | null,
 ): number {
-  const intervals = mergeIntervals(
-    state.triangles
-      .filter((triangle) => triangle.id !== excludedId)
-      .map((triangle) => strictIntervalOnSegment(start, end, triangle, state.strictEps)),
+  const intervals = activeIntervalsOnSegment(
+    state,
+    activeCUnionCoverage(state, cUnionModel),
+    start,
+    end,
+    excludedId,
   );
   const gaps = gapsFromIntervals(intervals);
   return gaps.reduce((max, gap) => Math.max(max, gap[1]), 0);
@@ -561,10 +686,11 @@ function resolvedVd0RawSourceValue(
   triangle: FreeTriangleState,
   coordinate: FreeVd0Coordinate,
   ref: FreeNamedPointRef | null | undefined,
+  cUnionModel?: CUnionModel | null,
 ): number | null {
   if (!ref) return null;
   const branch = branchForVd0Coordinate(triangle, coordinate);
-  const point = resolveNamedPoint(state, ref);
+  const point = resolveNamedPoint(state, ref, cUnionModel);
   if (!branch || !point) return null;
   return segmentParameter(branch.start, branch.end, point, Math.max(1e-5, state.strictEps * 4));
 }
@@ -579,6 +705,7 @@ export function getFreeVd0RawSourceOptions(
   state: FreeState,
   triangle: FreeTriangleState,
   coordinate: FreeVd0Coordinate,
+  cUnionModel?: CUnionModel | null,
 ): FreeVd0RawSourceOption[] {
   if (triangle.id === 'C') return [];
   const vertexIndex = Number(triangle.id.slice(1));
@@ -592,7 +719,7 @@ export function getFreeVd0RawSourceOptions(
     ...state.labels.map((label) => ({ kind: 'label', labelId: label.id }) as FreeNamedPointRef),
   ];
   return refs.flatMap((ref) => {
-    const value = resolvedVd0RawSourceValue(state, triangle, coordinate, ref);
+    const value = resolvedVd0RawSourceValue(state, triangle, coordinate, ref, cUnionModel);
     return value === null ? [] : [{ ref, label: namedPointLabel(ref), value }];
   });
 }
@@ -607,6 +734,21 @@ export interface FreeVd0Status {
   max: number;
 }
 
+export function getFreeVd0SuspensionReason(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): string | null {
+  if (!triangle.vd0.enabled) return null;
+  for (const coordinate of ['a', 'b', 'c'] as FreeVd0Coordinate[]) {
+    const source = triangle.vd0.rawSources?.[coordinate];
+    if (source && isFreeNamedPointRefSuspended(state, source, cUnionModel)) {
+      return `Vd0 paused: ${coordinate} source ${namedPointLabel(source)} is suspended.`;
+    }
+  }
+  return null;
+}
+
 interface FreeVd0Target {
   raw: { a: number; b: number; c: number };
   rawSourceLabels: Partial<Record<FreeVd0Coordinate, string>>;
@@ -618,8 +760,12 @@ interface FreeVd0Target {
   points: Point[];
 }
 
-export function getFreeVd0Status(state: FreeState, triangle: FreeTriangleState): FreeVd0Status | null {
-  const target = getFreeVd0Target(state, triangle);
+export function getFreeVd0Status(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): FreeVd0Status | null {
+  const target = getFreeVd0Target(state, triangle, cUnionModel);
   if (!target) return null;
   return {
     ok: true,
@@ -666,8 +812,16 @@ function placedUnitTriangleContainsPoints(points: Point[], triangle: FreeTriangl
   return points.every((point) => closedPointInPlacedUnitTriangle(point, triangle));
 }
 
-function getFreeVd0Target(state: FreeState, triangle: FreeTriangleState): FreeVd0Target | null {
-  if (triangle.id === 'C' || !triangle.vd0.enabled) {
+function getFreeVd0Target(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): FreeVd0Target | null {
+  if (
+    triangle.id === 'C'
+    || !triangle.vd0.enabled
+    || getFreeVd0SuspensionReason(state, triangle, cUnionModel)
+  ) {
     return null;
   }
 
@@ -677,14 +831,14 @@ function getFreeVd0Target(state: FreeState, triangle: FreeTriangleState): FreeVd
   const warnings: string[] = [];
   const rawSources = triangle.vd0.rawSources ?? {};
   const automatic = {
-    a: farthestGapEndExcludingTriangle(state, triangle.id, vertex, HEXAGON_VERTICES[(index + 5) % 6]),
-    b: farthestGapEndExcludingTriangle(state, triangle.id, vertex, HEXAGON_VERTICES[(index + 1) % 6]),
-    c: farthestGapEndExcludingTriangle(state, triangle.id, vertex, { x: 0, y: 0 }),
+    a: farthestGapEndExcludingTriangle(state, triangle.id, vertex, HEXAGON_VERTICES[(index + 5) % 6], cUnionModel),
+    b: farthestGapEndExcludingTriangle(state, triangle.id, vertex, HEXAGON_VERTICES[(index + 1) % 6], cUnionModel),
+    c: farthestGapEndExcludingTriangle(state, triangle.id, vertex, { x: 0, y: 0 }, cUnionModel),
   };
   const manualValue = (coordinate: FreeVd0Coordinate): number => {
     const source = rawSources[coordinate];
     if (!source) return automatic[coordinate];
-    const value = resolvedVd0RawSourceValue(state, triangle, coordinate, source);
+    const value = resolvedVd0RawSourceValue(state, triangle, coordinate, source, cUnionModel);
     const label = namedPointLabel(source);
     if (value === null) {
       warnings.push(`${coordinate} source ${label} invalid; using auto`);
@@ -715,8 +869,12 @@ function getFreeVd0Target(state: FreeState, triangle: FreeTriangleState): FreeVd
   };
 }
 
-export function autoPlaceFreeVd0Triangle(state: FreeState, triangle: FreeTriangleState): { ok: true } | { ok: false; reason: string } {
-  const target = getFreeVd0Target(state, triangle);
+export function autoPlaceFreeVd0Triangle(
+  state: FreeState,
+  triangle: FreeTriangleState,
+  cUnionModel?: CUnionModel | null,
+): { ok: true } | { ok: false; reason: string } {
+  const target = getFreeVd0Target(state, triangle, cUnionModel);
   if (!target) {
     return { ok: true };
   }
@@ -771,12 +929,15 @@ export function autoPlaceFreeVd0Triangle(state: FreeState, triangle: FreeTriangl
   return { ok: true };
 }
 
-export function autoPlaceAllFreeVd0Triangles(state: FreeState): { ok: true } | { ok: false; failedIds: FreeTriangleId[] } {
+export function autoPlaceAllFreeVd0Triangles(
+  state: FreeState,
+  cUnionModel?: CUnionModel | null,
+): { ok: true } | { ok: false; failedIds: FreeTriangleId[] } {
   const failedIds: FreeTriangleId[] = [];
   for (let i = 0; i < 6; i++) {
     const triangle = state.triangles.find((candidate) => candidate.id === `V${i}` as FreeTriangleId);
     if (!triangle?.vd0.enabled) continue;
-    const result = autoPlaceFreeVd0Triangle(state, triangle);
+    const result = autoPlaceFreeVd0Triangle(state, triangle, cUnionModel);
     if (!result.ok) {
       failedIds.push(triangle.id);
     }
@@ -784,13 +945,14 @@ export function autoPlaceAllFreeVd0Triangles(state: FreeState): { ok: true } | {
   return failedIds.length === 0 ? { ok: true } : { ok: false, failedIds };
 }
 
-export function validateFreeState(state: FreeState): FreeValidationResult {
-  const visibleOrHiddenTriangles = state.triangles;
+export function validateFreeState(
+  state: FreeState,
+  cUnionModel?: CUnionModel | null,
+): FreeValidationResult {
+  const cUnionCoverage = activeCUnionCoverage(state, cUnionModel);
   const segments: FreeValidationSegment[] = [];
   const checkSegment = (kind: 'edge' | 'diag', index: number, start: Point, end: Point): void => {
-    const intervals = mergeIntervals(
-      visibleOrHiddenTriangles.map((triangle) => strictIntervalOnSegment(start, end, triangle, state.strictEps)),
-    );
+    const intervals = activeIntervalsOnSegment(state, cUnionCoverage, start, end);
     segments.push({ kind, index, intervals, gaps: gapsFromIntervals(intervals) });
   };
 
@@ -806,11 +968,9 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
   }
   if (state.target === 'LOTUS') {
     for (const component of lotusComponents()) {
-      const intervals = mergeIntervals(
-        component.arc
-          ? visibleOrHiddenTriangles.flatMap((triangle) => strictIntervalOnArc(component.arc!, triangle, state.strictEps))
-          : visibleOrHiddenTriangles.map((triangle) => strictIntervalOnSegment(component.start, component.end, triangle, state.strictEps)),
-      );
+      const intervals = component.arc
+        ? activeIntervalsOnArc(state, cUnionCoverage, component.arc)
+        : activeIntervalsOnSegment(state, cUnionCoverage, component.start, component.end);
       segments.push({
         kind: component.arc ? 'lotus-arc' : 'lotus-line',
         index: component.ref.index,
@@ -842,20 +1002,26 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
     point: target.point,
   })));
   for (const { label, point } of points) {
-    if (!state.triangles.some((triangle) => strictPointInTriangle(point, triangle, state.strictEps))) {
+    if (!activeCoverersContainPoint(state, cUnionCoverage, point)) {
       pointFailures.push(label);
     }
   }
 
   const constraintStatuses = state.triangles.map((triangle): FreeConstraintStatus => {
     const messages: string[] = [];
-    for (const { point, label } of getRequiredPoints(state, triangle)) {
+    if (triangle.id === 'C' && state.cForm !== 'triangle') {
+      return { triangleId: triangle.id, ok: true, messages };
+    }
+    for (const { point, label } of getRequiredPoints(state, triangle, cUnionModel)) {
       if (!strictPointInTriangle(point, triangle, state.strictEps)) {
         messages.push(`misses ${label}`);
       }
     }
-    if (triangle.edgePointConstraint) {
-      const point = resolveNamedPoint(state, triangle.edgePointConstraint.point);
+    if (
+      triangle.edgePointConstraint
+      && !isFreeNamedPointRefSuspended(state, triangle.edgePointConstraint.point, cUnionModel)
+    ) {
+      const point = resolveNamedPoint(state, triangle.edgePointConstraint.point, cUnionModel);
       if (!point) {
         messages.push(`missing ${namedPointLabel(triangle.edgePointConstraint.point)}`);
       } else {
@@ -868,7 +1034,7 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
         }
       }
     }
-    const vd0Status = state.target === 'LOTUS' ? null : getFreeVd0Status(state, triangle);
+    const vd0Status = state.target === 'LOTUS' ? null : getFreeVd0Status(state, triangle, cUnionModel);
     if (vd0Status?.message) {
       messages.push(vd0Status.message);
     }
@@ -884,7 +1050,7 @@ export function validateFreeState(state: FreeState): FreeValidationResult {
   };
 }
 
-export function skeletonSegments(state: FreeState): FreeSegment[] {
+export function skeletonSegments(state: FreeState, cUnionModel?: CUnionModel | null): FreeSegment[] {
   const segments: FreeSegment[] = [];
   for (let i = 0; i < 6; i++) {
     segments.push({
@@ -901,7 +1067,7 @@ export function skeletonSegments(state: FreeState): FreeSegment[] {
     });
   }
   for (const triangle of state.triangles) {
-    if (triangle.hidden) continue;
+    if (triangle.hidden || (triangle.id === 'C' && state.cForm !== 'triangle')) continue;
     const vertices = triangleVertices(triangle.center, triangle.angle);
     for (let i = 0; i < 3; i++) {
       segments.push({
@@ -909,6 +1075,22 @@ export function skeletonSegments(state: FreeState): FreeSegment[] {
         start: vertices[i],
         end: vertices[(i + 1) % 3],
         label: `${triangle.id}.edge${i}`,
+      });
+    }
+  }
+  if (state.cForm === 'c-union' && cUnionModel) {
+    const rawBoundary = cUnionBoundaryPoints(cUnionModel, state.cUnionCeFilter);
+    if (rawBoundary.length >= 2) {
+      const first = rawBoundary[0];
+      const last = rawBoundary[rawBoundary.length - 1];
+      const isClosed = Math.hypot(first.x - last.x, first.y - last.y) <= EPS;
+      const polyline = isClosed ? [...rawBoundary] : [...rawBoundary, first];
+      segments.push({
+        ref: { kind: 'c-union-boundary', index: 0 },
+        start: polyline[0],
+        end: polyline[polyline.length - 1],
+        label: 'Cunion boundary',
+        polyline,
       });
     }
   }
@@ -974,8 +1156,14 @@ export function sameSegmentRef(a: FreeSegmentRef, b: FreeSegmentRef): boolean {
   return a.kind === b.kind && a.index === b.index && a.triangleId === b.triangleId;
 }
 
-export function getSegmentByRef(state: FreeState, ref: FreeSegmentRef): FreeSegment | null {
-  return skeletonSegments(state).find((segment) => sameSegmentRef(segment.ref, ref)) ?? null;
+export function getSegmentByRef(
+  state: FreeState,
+  ref: FreeSegmentRef,
+  cUnionModel?: CUnionModel | null,
+): FreeSegment | null {
+  const segment = skeletonSegments(state, cUnionModel).find((candidate) => sameSegmentRef(candidate.ref, ref));
+  if (!segment) return null;
+  return ref.kind === 'c-union-boundary' ? { ...segment, ref } : segment;
 }
 
 function pointOnArc(arc: NonNullable<FreeSegment['arc']>, t: number): Point {
@@ -986,16 +1174,17 @@ function pointOnArc(arc: NonNullable<FreeSegment['arc']>, t: number): Point {
   };
 }
 
-function arcLineIntersection(arcSegment: FreeSegment, lineSegment: FreeSegment): Point | null {
-  if (!arcSegment.arc) return null;
+function arcLineIntersections(arcSegment: FreeSegment, lineSegment: FreeSegment): Point[] {
+  if (!arcSegment.arc) return [];
   const d = { x: lineSegment.end.x - lineSegment.start.x, y: lineSegment.end.y - lineSegment.start.y };
   const f = { x: lineSegment.start.x - arcSegment.arc.center.x, y: lineSegment.start.y - arcSegment.arc.center.y };
   const a = d.x * d.x + d.y * d.y;
   const b = 2 * (f.x * d.x + f.y * d.y);
   const c = f.x * f.x + f.y * f.y - arcSegment.arc.radius * arcSegment.arc.radius;
   const disc = b * b - 4 * a * c;
-  if (a < EPS || disc < -EPS) return null;
+  if (a < EPS || disc < -EPS) return [];
   const sqrtDisc = Math.sqrt(Math.max(0, disc));
+  const intersections: Point[] = [];
   for (const tLine of [(-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a)]) {
     if (tLine < -EPS || tLine > 1 + EPS) continue;
     const point = {
@@ -1009,16 +1198,16 @@ function arcLineIntersection(arcSegment: FreeSegment, lineSegment: FreeSegment):
     );
     const tArc = relative / arcSegment.arc.sweep;
     if (tArc >= -EPS && tArc <= 1 + EPS) {
-      return pointOnArc(arcSegment.arc, clamp01(tArc));
+      const intersection = pointOnArc(arcSegment.arc, clamp01(tArc));
+      if (!intersections.some((point) => Math.hypot(point.x - intersection.x, point.y - intersection.y) <= EPS)) {
+        intersections.push(intersection);
+      }
     }
   }
-  return null;
+  return intersections;
 }
 
-export function segmentIntersection(a: FreeSegment, b: FreeSegment): Point | null {
-  if (a.arc && !b.arc) return arcLineIntersection(a, b);
-  if (!a.arc && b.arc) return arcLineIntersection(b, a);
-  if (a.arc || b.arc) return null;
+function lineSegmentIntersection(a: FreeSegment, b: FreeSegment): Point | null {
   const r = { x: a.end.x - a.start.x, y: a.end.y - a.start.y };
   const s = { x: b.end.x - b.start.x, y: b.end.y - b.start.y };
   const denom = r.x * s.y - r.y * s.x;
@@ -1030,8 +1219,63 @@ export function segmentIntersection(a: FreeSegment, b: FreeSegment): Point | nul
   return { x: a.start.x + t * r.x, y: a.start.y + t * r.y };
 }
 
-export function refreshLabels(state: FreeState): void {
+function simpleSegmentIntersections(a: FreeSegment, b: FreeSegment): Point[] {
+  if (a.arc && !b.arc) return arcLineIntersections(a, b);
+  if (!a.arc && b.arc) return arcLineIntersections(b, a);
+  if (a.arc || b.arc) return [];
+  const point = lineSegmentIntersection(a, b);
+  return point ? [point] : [];
+}
+
+function polylineParts(segment: FreeSegment): FreeSegment[] {
+  if (!segment.polyline) return [segment];
+  const parts: FreeSegment[] = [];
+  for (let i = 0; i + 1 < segment.polyline.length; i++) {
+    parts.push({
+      ref: segment.ref,
+      start: segment.polyline[i],
+      end: segment.polyline[i + 1],
+      label: segment.label,
+    });
+  }
+  return parts;
+}
+
+function segmentIntersectionCandidates(a: FreeSegment, b: FreeSegment): Point[] {
+  const intersections = polylineParts(a).flatMap((first) =>
+    polylineParts(b).flatMap((second) => simpleSegmentIntersections(first, second)),
+  );
+  return intersections.filter((point, index) =>
+    intersections.findIndex((candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) <= EPS) === index,
+  );
+}
+
+export function segmentIntersection(a: FreeSegment, b: FreeSegment, preferredPoint?: Point | null): Point | null {
+  const intersections = segmentIntersectionCandidates(a, b);
+  if (intersections.length === 0) return null;
+  const preferred = preferredPoint
+    ?? (a.ref.kind === 'c-union-boundary' ? a.ref.anchorPoint : undefined)
+    ?? (b.ref.kind === 'c-union-boundary' ? b.ref.anchorPoint : undefined);
+  if (!preferred) return intersections[0];
+  return intersections.reduce((nearest, point) =>
+    Math.hypot(point.x - preferred.x, point.y - preferred.y)
+      < Math.hypot(nearest.x - preferred.x, nearest.y - preferred.y)
+      ? point
+      : nearest,
+  );
+}
+
+export function refreshLabels(state: FreeState, cUnionModel?: CUnionModel | null): void {
   for (const label of state.labels) {
+    if (labelHasUnavailableSource(state, label, cUnionModel)) {
+      continue;
+    }
+    const usesPendingCUnion = !cUnionModel && state.cForm === 'c-union' && (
+      label.first?.kind === 'c-union-boundary' || label.second?.kind === 'c-union-boundary'
+    );
+    if (usesPendingCUnion) {
+      continue;
+    }
     const recomputeStatic = label.mode === 'static' && (
       label.first?.kind === 'lotus-arc' || label.second?.kind === 'lotus-arc'
     );
@@ -1042,9 +1286,9 @@ export function refreshLabels(state: FreeState): void {
       label.point = null;
       continue;
     }
-    const first = getSegmentByRef(state, label.first);
-    const second = getSegmentByRef(state, label.second);
-    label.point = first && second ? segmentIntersection(first, second) : null;
+    const first = getSegmentByRef(state, label.first, cUnionModel);
+    const second = getSegmentByRef(state, label.second, cUnionModel);
+    label.point = first && second ? segmentIntersection(first, second, label.point) : null;
   }
 }
 
@@ -1063,13 +1307,24 @@ export function createLabel(
   first: FreeSegmentRef,
   second: FreeSegmentRef,
   mode: FreeLabel['mode'],
+  cUnionModel?: CUnionModel | null,
 ): FreeLabel | null {
+  const boundaryCount = (first.kind === 'c-union-boundary' ? 1 : 0)
+    + (second.kind === 'c-union-boundary' ? 1 : 0);
+  if (boundaryCount > 0) {
+    if (boundaryCount !== 1) return null;
+    const other = first.kind === 'c-union-boundary' ? second : first;
+    const canPair = other.kind === 'hex-edge'
+      || other.kind === 'half-diagonal'
+      || (other.kind === 'triangle-edge' && other.triangleId !== 'C');
+    if (!canPair) return null;
+  }
   const arcCount = (first.kind === 'lotus-arc' ? 1 : 0) + (second.kind === 'lotus-arc' ? 1 : 0);
   if (arcCount > 0 && (arcCount !== 1 || (first.kind !== 'triangle-edge' && second.kind !== 'triangle-edge'))) {
     return null;
   }
-  const firstSegment = getSegmentByRef(state, first);
-  const secondSegment = getSegmentByRef(state, second);
+  const firstSegment = getSegmentByRef(state, first, cUnionModel);
+  const secondSegment = getSegmentByRef(state, second, cUnionModel);
   if (!firstSegment || !secondSegment) return null;
   const point = segmentIntersection(firstSegment, secondSegment);
   if (!point) return null;

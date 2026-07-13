@@ -1,13 +1,15 @@
 import type { Point } from './types';
 import type { SymmetricPointSeed } from './symmetricPoints';
+import type { CUnionCeFilter } from './cUnion';
 
 export type FreeTriangleId = 'C' | 'V0' | 'V1' | 'V2' | 'V3' | 'V4' | 'V5';
+export type FreeCForm = 'triangle' | 'c-union';
 export type FreeTarget = 'S_HALF' | 'S_T' | 'S' | 'BENZENE' | 'LOTUS';
 export type FreeTool = 'move' | 'd-mark' | 's-mark' | 'sample' | 'point';
 export type FreeVd0Mode = 'max-c' | 'max-a' | 'max-b';
 export type FreeVd0Coordinate = 'a' | 'b' | 'c';
 export type NamedPointKind = 'O' | 'M' | 'P' | 'B' | 'V' | 'label' | 'manual';
-export type FreeSegmentKind = 'hex-edge' | 'half-diagonal' | 'triangle-edge' | 'lotus-arc';
+export type FreeSegmentKind = 'hex-edge' | 'half-diagonal' | 'triangle-edge' | 'lotus-arc' | 'c-union-boundary';
 
 export interface FreeNamedPointRef {
   kind: NamedPointKind;
@@ -21,6 +23,7 @@ export interface FreeSegmentRef {
   kind: FreeSegmentKind;
   index: number;
   triangleId?: FreeTriangleId;
+  anchorPoint?: Point;
 }
 
 export interface FreeLabel {
@@ -55,6 +58,8 @@ export interface FreeTriangleState {
 }
 
 export interface FreeState {
+  cForm: FreeCForm;
+  cUnionCeFilter: CUnionCeFilter;
   target: FreeTarget;
   targetTPoints: FreeTargetTPoint[];
   tool: FreeTool;
@@ -80,6 +85,7 @@ export interface FreeSegment {
   start: Point;
   end: Point;
   label: string;
+  polyline?: Point[];
   arc?: {
     center: Point;
     radius: number;

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "verify:cunion": "node scripts/verify-cunion.mjs",
     "deploy": "npm run build && surge dist hexagon-cover-visual.surge.sh",
     "preview": "vite preview"
   },

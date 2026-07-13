@@ -1,6 +1,7 @@
 import { canvasToMath, config, scaleToMath } from './coords';
-import { distanceToSegment, pointInTriangle } from './geometry';
+import { closestPointOnSegment, distanceToSegment, pointInTriangle } from './geometry';
 import { HEXAGON_VERTICES } from './hexagon';
+import type { CUnionModel } from './cUnion';
 import {
   createLabel,
   getSegmentByRef,
@@ -51,6 +52,7 @@ export function setupFreeInteraction(
   canvas: HTMLCanvasElement,
   getState: () => FreeState,
   render: () => void,
+  getCUnionModel: () => CUnionModel | null,
   onDragEnd?: () => void,
 ): FreeInteractionApi {
   let enabled = false;
@@ -68,7 +70,8 @@ export function setupFreeInteraction(
 
   function selectedTriangle(): FreeTriangleState | null {
     const state = getState();
-    return state.triangles.find((triangle) => triangle.id === state.selectedTriangleId) ?? null;
+    const triangle = state.triangles.find((candidate) => candidate.id === state.selectedTriangleId) ?? null;
+    return triangle?.id === 'C' && state.cForm === 'c-union' ? null : triangle;
   }
 
   function triangleUnderPoint(point: Point): FreeTriangleState | null {
@@ -85,7 +88,7 @@ export function setupFreeInteraction(
 
     for (let i = state.triangles.length - 1; i >= 0; i--) {
       const triangle = state.triangles[i];
-      if (triangle.hidden || triangle.fixed) continue;
+      if (triangle.hidden || triangle.fixed || (triangle.id === 'C' && state.cForm === 'c-union')) continue;
       if (pointInTriangle(point, ...triangleVertices(triangle.center, triangle.angle))) {
         return triangle;
       }
@@ -104,14 +107,29 @@ export function setupFreeInteraction(
   function segmentUnderPoint(point: Point): FreeSegmentRef | null {
     const state = getState();
     const limit = scaleToMath(EDGE_HIT_PX);
-    let best: { ref: FreeSegmentRef; distance: number } | null = null;
-    for (const segment of skeletonSegments(state)) {
-      const d = segment.arc ? distanceToArc(point, segment.arc) : distanceToSegment(point, segment.start, segment.end);
+    let best: { ref: FreeSegmentRef; distance: number; anchorPoint?: Point } | null = null;
+    for (const segment of skeletonSegments(state, getCUnionModel())) {
+      if (segment.polyline) {
+        for (let i = 0; i + 1 < segment.polyline.length; i++) {
+          const anchorPoint = closestPointOnSegment(point, segment.polyline[i], segment.polyline[i + 1]);
+          const d = Math.hypot(point.x - anchorPoint.x, point.y - anchorPoint.y);
+          if (d <= limit && (!best || d < best.distance)) {
+            best = { ref: segment.ref, distance: d, anchorPoint };
+          }
+        }
+        continue;
+      }
+      const d = segment.arc
+        ? distanceToArc(point, segment.arc)
+        : distanceToSegment(point, segment.start, segment.end);
       if (d <= limit && (!best || d < best.distance)) {
         best = { ref: segment.ref, distance: d };
       }
     }
-    return best?.ref ?? null;
+    if (!best) return null;
+    return best.ref.kind === 'c-union-boundary' && best.anchorPoint
+      ? { ...best.ref, anchorPoint: best.anchorPoint }
+      : best.ref;
   }
 
   function targetTHandleUnderPoint(point: Point): { index: number; targetTId: string } | null {
@@ -210,6 +228,7 @@ export function setupFreeInteraction(
 
   function selectMarkSegment(ref: FreeSegmentRef): void {
     const state = getState();
+    const cUnionModel = getCUnionModel();
     if (state.selectedSegments.some((selected) => sameSegmentRef(selected, ref))) {
       state.selectedSegments = state.selectedSegments.filter((selected) => !sameSegmentRef(selected, ref));
       state.status = 'Segment unselected.';
@@ -219,12 +238,18 @@ export function setupFreeInteraction(
     const next = [...state.selectedSegments, ref].slice(-2);
     state.selectedSegments = next;
     if (next.length < 2) {
-      const segment = getSegmentByRef(state, ref);
+      const segment = getSegmentByRef(state, ref, cUnionModel);
       state.status = `Selected ${segment?.label ?? 'segment'}; choose one more segment.`;
       return;
     }
 
-    const label = createLabel(state, next[0], next[1], state.tool === 's-mark' ? 'static' : 'dynamic');
+    const label = createLabel(
+      state,
+      next[0],
+      next[1],
+      state.tool === 's-mark' ? 'static' : 'dynamic',
+      cUnionModel,
+    );
     if (!label) {
       state.status = 'Selected segments do not intersect.';
       state.selectedSegments = [];
@@ -276,7 +301,7 @@ export function setupFreeInteraction(
       };
       canvas.setPointerCapture(e.pointerId);
       setTargetTFromPoint(state, targetTHandle.targetTId, targetTHandle.index, point);
-      refreshLabels(state);
+      refreshLabels(state, getCUnionModel());
       render();
       e.preventDefault();
       return;
@@ -314,7 +339,7 @@ export function setupFreeInteraction(
     if (activeDrag.pointerId !== e.pointerId) return;
     if (activeDrag.kind === 'target-t') {
       setTargetTFromPoint(state, activeDrag.targetTId, activeDrag.index, point);
-      refreshLabels(state);
+      refreshLabels(state, getCUnionModel());
       render();
       e.preventDefault();
       return;
@@ -328,7 +353,12 @@ export function setupFreeInteraction(
       return;
     }
     const triangle = state.triangles.find((candidate) => candidate.id === activeDrag.triangleId);
-    if (!triangle || triangle.fixed || triangle.hidden) return;
+    if (
+      !triangle
+      || triangle.fixed
+      || triangle.hidden
+      || (triangle.id === 'C' && state.cForm === 'c-union')
+    ) return;
 
     if (activeDrag.rotate) {
       const startAngle = Math.atan2(
@@ -346,8 +376,8 @@ export function setupFreeInteraction(
       triangle.angle = activeDrag.startAngle;
     }
 
-    projectTriangleToConstraints(state, triangle);
-    refreshLabels(state);
+    projectTriangleToConstraints(state, triangle, getCUnionModel());
+    refreshLabels(state, getCUnionModel());
     render();
     e.preventDefault();
   }
