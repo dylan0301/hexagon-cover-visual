@@ -1,7 +1,7 @@
 import './style.css';
 import type { Point, ShapeMode, TriangleState } from './types';
-import { config, mathToCanvas, scaleToCanvas, setCanvasSize } from './coords';
-import { drawHexagon, HEXAGON_VERTICES } from './hexagon';
+import { canvasToMath, config, mathToCanvas, scaleToCanvas, scaleToMath, setCanvasSize } from './coords';
+import { drawHexagon, drawHexagonLines, HEXAGON_VERTICES } from './hexagon';
 import {
   computeChainValuesForLocalCs,
   getAdmissibleOrderedSource,
@@ -52,8 +52,10 @@ import {
   describeTarget,
   getSegmentByRef,
   getFreeVd0Status,
+  getFreeVd0SuspensionReason,
   getFreeVd0RawSourceOptions,
   getTriangle,
+  isFreeLabelSuspended,
   lotusComponents,
   midpoint,
   namedPointLabel,
@@ -121,7 +123,6 @@ import {
   type AbUnionQuality,
   type AbUnionBoundaryRenderResult,
   type AbUnionRenderResult,
-  type AbUnionState,
   type AbUnionSumConstraintMode,
   type AbUnionTool,
 } from './abUnion';
@@ -142,22 +143,31 @@ import {
   type AbHullDebugResult,
 } from './abHullDebug';
 import {
-  createDefaultConj0521State,
-  createDefaultConj0525State,
-  moveConj0521Dot,
-  moveConj0525Dot,
-  renderConj0521,
-  renderConj0525,
-  type Conj0521Options,
-  type Conj0521RenderResult,
-  type Conj0525Options,
-} from './conj0521';
+  CORE_CASE_POINT_IDS,
+  createDefaultCoreCaseState,
+  drawCoreCaseGraphSample,
+  isCoreCasePointId,
+  moveCoreCaseDot,
+  renderCoreCase,
+  type CoreCaseOptions,
+  type CoreCaseRenderResult,
+} from './coreCase';
+import {
+  CORE_GRAPH_SAMPLE_RATES,
+  createCoreGraphRenderer,
+  type CoreGraphSampleRate,
+} from './coreGraph';
 import {
   areaConjRequiredPoints,
   computeAreaConjResult,
   type AreaConjQuality,
   type AreaConjResult,
 } from './areaConjecture';
+import {
+  buildCUnionModel,
+  cUnionBoundaryPoints,
+  type CUnionModel,
+} from './cUnion';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -213,6 +223,19 @@ const freeStateLoadButton = document.getElementById('free-state-load') as HTMLBu
 const abUnionPanel = document.getElementById('ab-union-panel') as HTMLDivElement;
 const abUnionPanelTitle = document.getElementById('ab-union-panel-title') as HTMLDivElement;
 const abUnionControls = document.getElementById('ab-union-controls') as HTMLDivElement;
+const coreGraphPanel = document.getElementById('core-graph-panel') as HTMLDivElement;
+const coreGraphStatus = document.getElementById('core-graph-status') as HTMLDivElement;
+const corePointControls = document.getElementById('core-point-controls') as HTMLDivElement;
+const coreSampleRateSelect = document.getElementById('core-sample-rate-select') as HTMLSelectElement;
+const coreDenseSpecialCurveToggle = document.getElementById('core-dense-special-curve-toggle') as HTMLInputElement;
+const coreSpecialNeighborhoodToggle = document.getElementById('core-special-neighborhood-toggle') as HTMLInputElement;
+const coreStrictTwoLineToggle = document.getElementById('core-strict-two-line-toggle') as HTMLInputElement;
+const coreRelaxedPToggle = document.getElementById('core-relaxed-p-toggle') as HTMLInputElement;
+const coreSurfaceCanvas = document.getElementById('core-surface-canvas') as HTMLCanvasElement;
+const coreHeatmapCanvas = document.getElementById('core-heatmap-canvas') as HTMLCanvasElement;
+const coreSliceSlider = document.getElementById('core-slice-slider') as HTMLInputElement;
+const coreSliceValueLabel = document.getElementById('core-slice-value') as HTMLSpanElement;
+const coreGraphRenderer = createCoreGraphRenderer(coreSurfaceCanvas, coreHeatmapCanvas);
 
 const triangleState: TriangleState = {
   position: { x: 0, y: 0 },
@@ -220,6 +243,8 @@ const triangleState: TriangleState = {
   controlPoint: { x: 0, y: 0 },
 };
 const DEFAULT_STRICT_EPS_UPPER_BOUND = 0.0001;
+type CoreCaseTool = 'move' | 'add' | 'delete' | 'core-point';
+
 let startValue = 0.25;
 let graphMode: GraphMode = 'composition';
 let shapeMode: ShapeMode = 'triangle';
@@ -239,6 +264,11 @@ let freeState: FreeState = createDefaultFreeState();
 let freeInitializedFromCurrent = false;
 let currentFreeValidation: FreeValidationResult | null = null;
 let freeInteractionApi: ReturnType<typeof setupFreeInteraction> | null = null;
+let cUnionModel: CUnionModel | null = null;
+let cUnionBuildState: 'idle' | 'building' | 'ready' | 'error' = 'idle';
+let cUnionBuildProgress = 0;
+let cUnionBuildError = '';
+let cUnionRenderPending = false;
 let sampleModeSavedTriangleStates: Partial<Record<FreeTriangleId, { hidden: boolean; fixed: boolean }>> | null = null;
 let currentV0Sample: VSample | RejectedSample | null = null;
 let currentCSample: CSample | RejectedSample | null = null;
@@ -246,10 +276,18 @@ let showAllSamplePoints = false;
 let abUnionState = createDefaultAbUnionState();
 let abHullDebugState = createDefaultAbHullDebugState();
 let areaConjState = createDefaultAbUnionState();
-let conj0521State = createDefaultConj0521State();
-let conj0525State = createDefaultConj0525State();
-let conj0521Options: Conj0521Options = { hardLimitDrag: false };
-let conj0525Options: Conj0525Options = { forceSum3: true, forceSum5: true, hardLimitDrag: false };
+let coreCaseState = createDefaultCoreCaseState();
+let coreCaseOptions: CoreCaseOptions = {
+  forceSum3: true,
+  forceSum5: true,
+  hardLimitDrag: false,
+  algorithm2Diagonals: false,
+  strictTwoLineSuperset: false,
+  relaxedPPoints: false,
+};
+let coreCaseTool: CoreCaseTool = 'move';
+let coreCaseDisabledPointIds: string[] = [];
+let coreCaseIntervalPointFractions: number[] = Array(6).fill(0.5);
 let currentAbHullDebugResult: AbHullDebugResult | null = null;
 let areaConstraintDelta = 0.000001;
 
@@ -279,7 +317,7 @@ let areaConjResults: AreaConjResult[] = [];
 let areaConjDirty = true;
 
 interface ControllerSnapshot {
-  version: 4;
+  version: 9;
   shapeMode: ShapeMode;
   graphMode: GraphMode;
   startValue: number;
@@ -297,11 +335,34 @@ interface ControllerSnapshot {
   ceStartOverrides: Record<string, number>;
   pointSeeds: SymmetricPointSeed[];
   selectedPointSeedId: string | null;
+  coreCaseDisabledPointIds: string[];
+  coreCaseIntervalPointFractions: number[];
+  coreCaseAlgorithm2Diagonals: boolean;
+  coreCaseStrictTwoLineSuperset: boolean;
+  coreCaseRelaxedPPoints: boolean;
+  coreGraphDisabledPointIds: string[];
+  coreGraphSampleRate: CoreGraphSampleRate;
+  coreGraphDenseSpecialCurveSampling: boolean;
+  coreGraphSpecialCurveNeighborhoodOnly: boolean;
+  coreGraphStrictTwoLineSuperset: boolean;
+  coreGraphRelaxedPPoints: boolean;
 }
 
-type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds'> & {
-  version?: 1 | 2 | 3 | 4;
+type RawControllerSnapshot = Omit<Partial<ControllerSnapshot>, 'version' | 'pointSeeds' | 'coreCaseDisabledPointIds'> & {
+  version?: 8 | 9;
   pointSeeds?: unknown;
+  coreCaseDisabledPointIds?: unknown;
+  coreCaseEnabledPointIds?: unknown;
+  coreCaseIntervalPointFractions?: unknown;
+  coreCaseAlgorithm2Diagonals?: unknown;
+  coreCaseStrictTwoLineSuperset?: unknown;
+  coreCaseRelaxedPPoints?: unknown;
+  coreGraphDisabledPointIds?: unknown;
+  coreGraphSampleRate?: unknown;
+  coreGraphDenseSpecialCurveSampling?: unknown;
+  coreGraphSpecialCurveNeighborhoodOnly?: unknown;
+  coreGraphStrictTwoLineSuperset?: unknown;
+  coreGraphRelaxedPPoints?: unknown;
 };
 
 function getResponsiveCanvasSize(target: HTMLCanvasElement): number {
@@ -325,6 +386,7 @@ function syncCanvasSizes(): void {
   setCanvasSize(mainCanvasSize);
   resizeHiDPICanvas(canvas, ctx, mainCanvasSize);
   regionRenderer.resize(getResponsiveCanvasSize(regionCanvas));
+  coreGraphRenderer.resize();
 }
 
 function formatTuple(values: number[]): string {
@@ -401,6 +463,243 @@ function clearPointSeeds(): void {
   freeState.pointSeeds = [];
   freeState.selectedPointSeedId = null;
   freeState.status = 'Cleared point seeds.';
+}
+
+function sanitizeCoreCasePointIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const ids = value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && isCoreCasePointId(candidate),
+  );
+  return Array.from(new Set(ids));
+}
+
+function coreCaseDisabledPointIdsFromLegacyEnabled(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const enabledIds = new Set(value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
+  ));
+  return CORE_CASE_POINT_IDS.filter((id) => !enabledIds.has(id));
+}
+
+function sanitizeCoreGraphPointIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const ids = value.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && CORE_CASE_POINT_IDS.includes(candidate),
+  );
+  return Array.from(new Set(ids));
+}
+
+function isCoreGraphSampleRate(value: unknown): value is CoreGraphSampleRate {
+  return typeof value === 'string' && CORE_GRAPH_SAMPLE_RATES.includes(value as CoreGraphSampleRate);
+}
+
+function coreGraphDisabledPointIds(): string[] {
+  const enabledIds = new Set(coreGraphRenderer.getEnabledPointIds());
+  return CORE_CASE_POINT_IDS.filter((id) => !enabledIds.has(id));
+}
+
+function pruneCoreCaseDisabledPointIds(currentPointIds: readonly string[]): void {
+  const currentIds = new Set(currentPointIds);
+  coreCaseDisabledPointIds = coreCaseDisabledPointIds.filter((id) => currentIds.has(id));
+}
+
+function sanitizeCoreCaseIntervalPointFractions(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return Array(6).fill(0.5);
+  }
+
+  return Array.from({ length: 6 }, (_, index) => {
+    const candidate = value[index];
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? clamp01(candidate) : 0.5;
+  });
+}
+
+function setCoreCasePointEnabled(pointId: string, enabled: boolean): void {
+  if (!isCoreCasePointId(pointId)) {
+    return;
+  }
+
+  const ids = new Set(coreCaseDisabledPointIds);
+  if (enabled) {
+    ids.delete(pointId);
+  } else {
+    ids.add(pointId);
+  }
+  coreCaseDisabledPointIds = sanitizeCoreCasePointIds(Array.from(ids));
+}
+
+function setCoreCaseRelaxedPPoints(enabled: boolean): void {
+  coreCaseOptions.relaxedPPoints = enabled;
+  if (enabled) {
+    coreCaseOptions.forceSum3 = false;
+    coreCaseOptions.forceSum5 = false;
+  }
+}
+
+function setCoreCaseForceSum(index: 3 | 5, enabled: boolean): void {
+  if (index === 3) {
+    coreCaseOptions.forceSum3 = enabled;
+  } else {
+    coreCaseOptions.forceSum5 = enabled;
+  }
+  if (enabled) {
+    coreCaseOptions.relaxedPPoints = false;
+  }
+}
+
+function coreCasePointerMath(event: PointerEvent): Point {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? config.canvasSize / rect.width : 1;
+  const scaleY = rect.height > 0 ? config.canvasSize / rect.height : 1;
+  return canvasToMath({
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
+  });
+}
+
+function coreCaseHitScale(pointerType: string): number {
+  if (pointerType === 'touch') return 1.75;
+  if (pointerType === 'pen') return 1.35;
+  return 1;
+}
+
+function pointDistance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointDot(a: Point, b: Point): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+function coreCaseEdgeVector(index: number): Point {
+  const start = HEXAGON_VERTICES[index];
+  const end = HEXAGON_VERTICES[(index + 1) % 6];
+  return { x: end.x - start.x, y: end.y - start.y };
+}
+
+function coreCasePointOnEdge(index: number, value: number): Point {
+  const start = HEXAGON_VERTICES[index];
+  const edge = coreCaseEdgeVector(index);
+  const t = clamp01(value);
+  return { x: start.x + t * edge.x, y: start.y + t * edge.y };
+}
+
+function coreCaseProjectEdgeValue(point: Point, index: number): number {
+  const start = HEXAGON_VERTICES[index];
+  const edge = coreCaseEdgeVector(index);
+  const relative = { x: point.x - start.x, y: point.y - start.y };
+  return clamp01(pointDot(relative, edge) / pointDot(edge, edge));
+}
+
+function coreCaseIntervalPoint(index: number): Point | null {
+  const edge = coreCaseState.edgeDots[index];
+  if (!edge?.split) return null;
+  const fraction = clamp01(coreCaseIntervalPointFractions[index] ?? 0.5);
+  return coreCasePointOnEdge(index, edge.left + fraction * (edge.right - edge.left));
+}
+
+function hitCoreCaseIntervalPoint(point: Point, pointerType: string): number | null {
+  const maxDistance = scaleToMath(12 * coreCaseHitScale(pointerType));
+  let bestIndex: number | null = null;
+  let bestDistance = Infinity;
+
+  for (let index = 0; index < 6; index++) {
+    const candidate = coreCaseIntervalPoint(index);
+    if (!candidate) continue;
+    const candidateDistance = pointDistance(point, candidate);
+    if (candidateDistance <= maxDistance && candidateDistance < bestDistance) {
+      bestIndex = index;
+      bestDistance = candidateDistance;
+    }
+  }
+
+  return bestIndex;
+}
+
+function setCoreCaseIntervalPointFromPoint(index: number, point: Point): void {
+  const edge = coreCaseState.edgeDots[index];
+  if (!edge?.split) return;
+  const value = coreCaseProjectEdgeValue(point, index);
+  const width = edge.right - edge.left;
+  coreCaseIntervalPointFractions[index] = width > 1e-12
+    ? clamp01((value - edge.left) / width)
+    : 0.5;
+}
+
+function setupCoreCaseIntervalPointInteraction(): void {
+  let active: { pointerId: number; index: number } | null = null;
+
+  function enabled(): boolean {
+    return shapeMode === 'core-case' && coreCaseTool === 'core-point';
+  }
+
+  function stop(): void {
+    if (active && canvas.hasPointerCapture(active.pointerId)) {
+      canvas.releasePointerCapture(active.pointerId);
+    }
+    active = null;
+  }
+
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!enabled() || !event.isPrimary) return;
+    const pointerType = event.pointerType || 'mouse';
+    const point = coreCasePointerMath(event);
+    const index = hitCoreCaseIntervalPoint(point, pointerType);
+    if (index === null) {
+      canvas.style.cursor = 'default';
+      return;
+    }
+
+    active = { pointerId: event.pointerId, index };
+    canvas.setPointerCapture(event.pointerId);
+    setCoreCaseIntervalPointFromPoint(index, point);
+    coreCaseState.status = `Dragging I${index}.`;
+    render();
+    event.preventDefault();
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+    if (active) {
+      if (active.pointerId !== event.pointerId) return;
+      if (!enabled()) {
+        stop();
+        return;
+      }
+      setCoreCaseIntervalPointFromPoint(active.index, coreCasePointerMath(event));
+      render();
+      event.preventDefault();
+      return;
+    }
+
+    if (!enabled()) return;
+    const pointerType = event.pointerType || 'mouse';
+    const point = coreCasePointerMath(event);
+    canvas.style.cursor = hitCoreCaseIntervalPoint(point, pointerType) === null ? 'default' : 'grab';
+  });
+
+  canvas.addEventListener('pointerup', (event) => {
+    if (!active || active.pointerId !== event.pointerId) return;
+    const index = active.index;
+    stop();
+    coreCaseState.status = `Updated I${index}.`;
+    render();
+    event.preventDefault();
+  });
+
+  canvas.addEventListener('pointercancel', (event) => {
+    if (!active || active.pointerId !== event.pointerId) return;
+    stop();
+    canvas.style.cursor = 'default';
+  });
 }
 
 function drawMarker(ctx2d: CanvasRenderingContext2D, x: number, y: number, fill: string, stroke?: string): void {
@@ -738,8 +1037,8 @@ function isShapeMode(value: unknown): value is ShapeMode {
     value === 'ab-hull-debug' ||
     value === 'max-area' ||
     value === 'area-conj' ||
-    value === 'conj-0521' ||
-    value === 'conj-0525';
+    value === 'core-case' ||
+    value === 'core-graph';
 }
 
 function isGraphMode(value: unknown): value is GraphMode {
@@ -761,7 +1060,7 @@ function setControllerStateStatus(text: string, isError = false): void {
 
 function getControllerSnapshot(): ControllerSnapshot {
   return {
-    version: 4,
+    version: 9,
     shapeMode,
     graphMode,
     startValue: clamp01(startValue),
@@ -783,6 +1082,17 @@ function getControllerSnapshot(): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(ceStartOverrides),
     pointSeeds: freeState.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } })),
     selectedPointSeedId: freeState.selectedPointSeedId,
+    coreCaseDisabledPointIds: coreCaseDisabledPointIds.slice(),
+    coreCaseIntervalPointFractions: coreCaseIntervalPointFractions.slice(),
+    coreCaseAlgorithm2Diagonals: coreCaseOptions.algorithm2Diagonals,
+    coreCaseStrictTwoLineSuperset: coreCaseOptions.strictTwoLineSuperset,
+    coreCaseRelaxedPPoints: coreCaseOptions.relaxedPPoints,
+    coreGraphDisabledPointIds: coreGraphDisabledPointIds(),
+    coreGraphSampleRate: coreGraphRenderer.getSampleRate(),
+    coreGraphDenseSpecialCurveSampling: coreGraphRenderer.getDenseSpecialCurveSampling(),
+    coreGraphSpecialCurveNeighborhoodOnly: coreGraphRenderer.getSpecialCurveNeighborhoodOnly(),
+    coreGraphStrictTwoLineSuperset: coreGraphRenderer.getStrictTwoLineSuperset(),
+    coreGraphRelaxedPPoints: coreGraphRenderer.getRelaxedPPoints(),
   };
 }
 
@@ -794,8 +1104,8 @@ function syncControllerSnapshot(): void {
 function parseControllerSnapshot(raw: string): ControllerSnapshot {
   const parsed = JSON.parse(raw) as RawControllerSnapshot;
 
-  if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) {
-    throw new Error('Unsupported snapshot version.');
+  if (parsed.version !== 8 && parsed.version !== 9) {
+    throw new Error('Unsupported snapshot version. Current version is 9.');
   }
   if (!isShapeMode(parsed.shapeMode)) {
     throw new Error('Invalid shapeMode.');
@@ -876,6 +1186,33 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
   ) {
     throw new Error('Invalid ceStartOverrides.');
   }
+  if ('coreCaseAlgorithm2Diagonals' in parsed && typeof parsed.coreCaseAlgorithm2Diagonals !== 'boolean') {
+    throw new Error('Invalid coreCaseAlgorithm2Diagonals.');
+  }
+  if ('coreCaseStrictTwoLineSuperset' in parsed && typeof parsed.coreCaseStrictTwoLineSuperset !== 'boolean') {
+    throw new Error('Invalid coreCaseStrictTwoLineSuperset.');
+  }
+  if ('coreCaseRelaxedPPoints' in parsed && typeof parsed.coreCaseRelaxedPPoints !== 'boolean') {
+    throw new Error('Invalid coreCaseRelaxedPPoints.');
+  }
+  if (!isCoreGraphSampleRate(parsed.coreGraphSampleRate)) {
+    throw new Error('Invalid coreGraphSampleRate.');
+  }
+  if (typeof parsed.coreGraphDenseSpecialCurveSampling !== 'boolean') {
+    throw new Error('Invalid coreGraphDenseSpecialCurveSampling.');
+  }
+  if (typeof parsed.coreGraphSpecialCurveNeighborhoodOnly !== 'boolean') {
+    throw new Error('Invalid coreGraphSpecialCurveNeighborhoodOnly.');
+  }
+  if (
+    'coreGraphStrictTwoLineSuperset' in parsed &&
+    typeof parsed.coreGraphStrictTwoLineSuperset !== 'boolean'
+  ) {
+    throw new Error('Invalid coreGraphStrictTwoLineSuperset.');
+  }
+  if ('coreGraphRelaxedPPoints' in parsed && typeof parsed.coreGraphRelaxedPPoints !== 'boolean') {
+    throw new Error('Invalid coreGraphRelaxedPPoints.');
+  }
 
   const parsedStrictEpsUpperBound = clampStrictEpsUpperBound(
     parsed.strictEpsUpperBound ?? DEFAULT_STRICT_EPS_UPPER_BOUND,
@@ -886,9 +1223,16 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     pointSeeds.some((seed) => seed.id === parsed.selectedPointSeedId)
     ? parsed.selectedPointSeedId
     : null;
+  const parsedCoreCaseDisabledPointIds = 'coreCaseDisabledPointIds' in parsed
+    ? sanitizeCoreCasePointIds(parsed.coreCaseDisabledPointIds)
+    : coreCaseDisabledPointIdsFromLegacyEnabled(parsed.coreCaseEnabledPointIds);
+  const parsedCoreCaseIntervalPointFractions = sanitizeCoreCaseIntervalPointFractions(
+    parsed.coreCaseIntervalPointFractions,
+  );
+  const parsedCoreGraphDisabledPointIds = sanitizeCoreGraphPointIds(parsed.coreGraphDisabledPointIds);
 
   return {
-    version: 4,
+    version: 9,
     shapeMode: parsed.shapeMode,
     graphMode: parsed.graphMode,
     startValue: clamp01(parsed.startValue),
@@ -910,6 +1254,17 @@ function parseControllerSnapshot(raw: string): ControllerSnapshot {
     ceStartOverrides: sanitizeCeStartOverrides(parsed.ceStartOverrides),
     pointSeeds,
     selectedPointSeedId,
+    coreCaseDisabledPointIds: parsedCoreCaseDisabledPointIds,
+    coreCaseIntervalPointFractions: parsedCoreCaseIntervalPointFractions,
+    coreCaseAlgorithm2Diagonals: parsed.coreCaseAlgorithm2Diagonals ?? false,
+    coreCaseStrictTwoLineSuperset: parsed.coreCaseStrictTwoLineSuperset ?? false,
+    coreCaseRelaxedPPoints: parsed.coreCaseRelaxedPPoints ?? false,
+    coreGraphDisabledPointIds: parsedCoreGraphDisabledPointIds,
+    coreGraphSampleRate: parsed.coreGraphSampleRate,
+    coreGraphDenseSpecialCurveSampling: parsed.coreGraphDenseSpecialCurveSampling,
+    coreGraphSpecialCurveNeighborhoodOnly: parsed.coreGraphSpecialCurveNeighborhoodOnly,
+    coreGraphStrictTwoLineSuperset: parsed.coreGraphStrictTwoLineSuperset ?? false,
+    coreGraphRelaxedPPoints: parsed.coreGraphRelaxedPPoints ?? false,
   };
 }
 
@@ -939,6 +1294,21 @@ function loadControllerSnapshot(raw: string): void {
   ceStartOverrides = { ...snapshot.ceStartOverrides };
   freeState.pointSeeds = snapshot.pointSeeds.map((seed) => ({ id: seed.id, point: { ...seed.point } }));
   freeState.selectedPointSeedId = snapshot.selectedPointSeedId;
+  coreCaseDisabledPointIds = snapshot.coreCaseDisabledPointIds.slice();
+  coreCaseIntervalPointFractions = snapshot.coreCaseIntervalPointFractions.slice();
+  coreCaseOptions.algorithm2Diagonals = snapshot.coreCaseAlgorithm2Diagonals;
+  coreCaseOptions.strictTwoLineSuperset = snapshot.coreCaseStrictTwoLineSuperset;
+  setCoreCaseRelaxedPPoints(snapshot.coreCaseRelaxedPPoints);
+  coreGraphRenderer.setSampleRate(snapshot.coreGraphSampleRate);
+  coreGraphRenderer.setDenseSpecialCurveSampling(snapshot.coreGraphDenseSpecialCurveSampling);
+  coreGraphRenderer.setSpecialCurveNeighborhoodOnly(snapshot.coreGraphSpecialCurveNeighborhoodOnly);
+  coreGraphRenderer.setStrictTwoLineSuperset(snapshot.coreGraphStrictTwoLineSuperset);
+  coreGraphRenderer.setRelaxedPPoints(snapshot.coreGraphRelaxedPPoints);
+  coreGraphRenderer.setEnabledPointIds(
+    CORE_CASE_POINT_IDS.filter((id) => !snapshot.coreGraphDisabledPointIds.includes(id)),
+  );
+  coreCaseTool = 'move';
+  setAbUnionTool(coreCaseState, 'move');
   ceDirectionSelect.value = ceDirection;
   ceIntervalSelect.value = ce2SelectedIntervalIndex.toString();
   setStrictCheckEnabled(snapshot.strictCheckEnabled);
@@ -1332,16 +1702,89 @@ function initializeFreeFromCurrentIfNeeded(): void {
   }
   freeState = next;
   freeInitializedFromCurrent = true;
-  refreshLabels(freeState);
+  refreshLabels(freeState, cUnionModel);
 }
 
-function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidationResult): void {
+function traceCanvasPolygon(ctx2d: CanvasRenderingContext2D, points: readonly Point[]): void {
+  if (points.length === 0) return;
+  const first = mathToCanvas(points[0]);
+  ctx2d.moveTo(first.x, first.y);
+  for (let i = 1; i < points.length; i++) {
+    const point = mathToCanvas(points[i]);
+    ctx2d.lineTo(point.x, point.y);
+  }
+  ctx2d.closePath();
+}
+
+function drawCUnionMode(ctx2d: CanvasRenderingContext2D, model: CUnionModel): void {
+  const boundary = cUnionBoundaryPoints(model, freeState.cUnionCeFilter);
+  if (boundary.length < 3) return;
+
   ctx2d.save();
+  ctx2d.beginPath();
+  ctx2d.rect(0, 0, config.canvasSize, config.canvasSize);
+  traceCanvasPolygon(ctx2d, HEXAGON_VERTICES);
+  ctx2d.clip('evenodd');
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.fillStyle = 'rgba(100, 116, 139, 0.16)';
+  ctx2d.fill();
+  ctx2d.restore();
+
+  ctx2d.save();
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, HEXAGON_VERTICES);
+  ctx2d.clip();
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.fillStyle = 'rgba(14, 165, 233, 0.24)';
+  ctx2d.fill();
+  ctx2d.restore();
+
+  drawHexagonLines(ctx2d);
+}
+
+function drawCUnionBoundary(ctx2d: CanvasRenderingContext2D, model: CUnionModel): void {
+  const boundary = cUnionBoundaryPoints(model, freeState.cUnionCeFilter);
+  if (boundary.length < 3) return;
+  ctx2d.save();
+  const boundarySelected = freeState.selectedSegments.some((segment) => segment.kind === 'c-union-boundary');
+  ctx2d.beginPath();
+  traceCanvasPolygon(ctx2d, boundary);
+  ctx2d.strokeStyle = boundarySelected ? '#facc15' : colorForTriangle('C');
+  ctx2d.lineWidth = boundarySelected ? 5 : 2;
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
+function drawCUnionReference(ctx2d: CanvasRenderingContext2D): void {
+  const origin = mathToCanvas({ x: 0, y: 0 });
+  const vertex = mathToCanvas(HEXAGON_VERTICES[4]);
+  ctx2d.save();
+  ctx2d.beginPath();
+  ctx2d.moveTo(origin.x, origin.y);
+  ctx2d.lineTo(vertex.x, vertex.y);
+  ctx2d.strokeStyle = '#d97706';
+  ctx2d.lineWidth = 2.5;
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
+function drawFreeMode(
+  ctx2d: CanvasRenderingContext2D,
+  validation: FreeValidationResult,
+  cUnionReady: boolean,
+): void {
+  ctx2d.save();
+  const pointFailures = cUnionReady ? validation.pointFailures : [];
+  if (freeState.cForm === 'c-union' && cUnionModel) {
+    drawCUnionMode(ctx2d, cUnionModel);
+  }
   if (freeState.target === 'LOTUS') {
     drawLotusTarget(ctx2d);
   }
   for (const triangle of freeState.triangles) {
-    if (triangle.hidden) {
+    if (triangle.hidden || freeState.cForm === 'c-union' && triangle.id === 'C') {
       continue;
     }
     const vertices = triangleVertices(triangle.center, triangle.angle).map(mathToCanvas);
@@ -1377,15 +1820,25 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
     }
   }
 
-  drawCoverageGaps(ctx2d, validation.segments);
+  if (cUnionReady) {
+    drawCoverageGaps(ctx2d, validation.segments);
+  }
   drawFreeSelectedSegments(ctx2d);
+  if (freeState.cForm === 'c-union' && cUnionModel) {
+    drawCUnionBoundary(ctx2d, cUnionModel);
+  }
+  if (freeState.cForm === 'c-union') {
+    drawCUnionReference(ctx2d);
+  }
 
   ctx2d.font = '12px monospace';
   for (let i = 0; i < 6; i++) {
     const point = mathToCanvas(midpoint(i));
     ctx2d.beginPath();
     ctx2d.arc(point.x, point.y, 4, 0, 2 * Math.PI);
-    ctx2d.fillStyle = validation.pointFailures.includes(`M${i}`) ? '#dc2626' : '#0f172a';
+    ctx2d.fillStyle = i === 4 && freeState.cForm === 'c-union'
+      ? '#d97706'
+      : pointFailures.includes(`M${i}`) ? '#dc2626' : '#0f172a';
     ctx2d.fill();
     ctx2d.fillText(`M${i}`, point.x + 5, point.y - 5);
   }
@@ -1397,7 +1850,7 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
         const point = mathToCanvas(targetTPoint(target, i));
         ctx2d.beginPath();
         ctx2d.arc(point.x, point.y, 6, 0, 2 * Math.PI);
-        ctx2d.fillStyle = validation.pointFailures.includes(label) ? '#dc2626' : '#f97316';
+        ctx2d.fillStyle = pointFailures.includes(label) ? '#dc2626' : '#f97316';
         ctx2d.fill();
         ctx2d.strokeStyle = target.fixed ? '#92400e' : '#7c2d12';
         ctx2d.lineWidth = target.fixed ? 2 : 1.5;
@@ -1413,7 +1866,7 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
       const point = mathToCanvas(benzenePoint(i));
       ctx2d.beginPath();
       ctx2d.arc(point.x, point.y, 5, 0, 2 * Math.PI);
-      ctx2d.fillStyle = validation.pointFailures.includes(`B${i}`) ? '#dc2626' : '#7c3aed';
+      ctx2d.fillStyle = pointFailures.includes(`B${i}`) ? '#dc2626' : '#7c3aed';
       ctx2d.fill();
       ctx2d.strokeStyle = '#4c1d95';
       ctx2d.lineWidth = 1.5;
@@ -1423,10 +1876,10 @@ function drawFreeMode(ctx2d: CanvasRenderingContext2D, validation: FreeValidatio
     }
   }
 
-  drawSymmetricPoints(ctx2d, new Set(validation.pointFailures));
+  drawSymmetricPoints(ctx2d, new Set(pointFailures));
 
   for (const label of freeState.labels) {
-    if (!label.point) {
+    if (!label.point || isFreeLabelSuspended(freeState, label, cUnionModel)) {
       continue;
     }
     const point = mathToCanvas(label.point);
@@ -1447,7 +1900,10 @@ function drawFreeSelectedSegments(ctx2d: CanvasRenderingContext2D): void {
   ctx2d.save();
   ctx2d.lineCap = 'round';
   for (const selected of freeState.selectedSegments) {
-    const segment = getSegmentByRef(freeState, selected);
+    if (selected.kind === 'c-union-boundary') {
+      continue;
+    }
+    const segment = getSegmentByRef(freeState, selected, cUnionModel);
     if (!segment) {
       continue;
     }
@@ -1492,7 +1948,7 @@ function namedPointOptions(selected: FreeNamedPointRef | null): string {
 function vd0RawSourceOptions(triangleId: FreeTriangleId, coordinate: FreeVd0Coordinate): string {
   const triangle = getTriangle(freeState, triangleId);
   const selected = triangle.vd0.rawSources?.[coordinate] ?? null;
-  const options = getFreeVd0RawSourceOptions(freeState, triangle, coordinate);
+  const options = getFreeVd0RawSourceOptions(freeState, triangle, coordinate, cUnionModel);
   const selectedIsValid = options.some((option) => sameNamedPointRef(option.ref, selected));
   const autoSelected = selected === null || selected === undefined;
   const optionHtml = options.map((option) => {
@@ -1559,7 +2015,7 @@ function clampInteger(value: string | undefined, min: number, max: number): numb
 }
 
 function formatFreeSnapshot(): string {
-  return JSON.stringify({ ...freeState, version: 7 }, null, 2);
+  return JSON.stringify({ ...freeState, version: 8 }, null, 2);
 }
 
 type RawFreeSnapshot = Partial<Omit<FreeState, 'targetTPoints'>> & {
@@ -1575,6 +2031,15 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
   const ref = value as Partial<FreeSegmentRef>;
   if (typeof ref.index !== 'number' || !Number.isInteger(ref.index)) return false;
   if (ref.kind === 'hex-edge' || ref.kind === 'half-diagonal' || ref.kind === 'lotus-arc') return true;
+  if (ref.kind === 'c-union-boundary') {
+    const anchorPoint = (ref as { anchorPoint?: unknown }).anchorPoint;
+    return ref.index === 0 && (
+      anchorPoint === undefined ||
+      !!anchorPoint && typeof anchorPoint === 'object' &&
+      typeof (anchorPoint as Point).x === 'number' && Number.isFinite((anchorPoint as Point).x) &&
+      typeof (anchorPoint as Point).y === 'number' && Number.isFinite((anchorPoint as Point).y)
+    );
+  }
   return ref.kind === 'triangle-edge' && (
     ref.triangleId === 'C' ||
     ref.triangleId === 'V0' ||
@@ -1584,6 +2049,21 @@ function isFreeSegmentRef(value: unknown): value is FreeSegmentRef {
     ref.triangleId === 'V4' ||
     ref.triangleId === 'V5'
   );
+}
+
+function sanitizeCUnionBoundaryAnchor(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const ref = value as { kind?: unknown; anchorPoint?: unknown };
+  if (ref.kind !== 'c-union-boundary' || ref.anchorPoint === undefined) return;
+  const point = ref.anchorPoint;
+  if (
+    !point ||
+    typeof point !== 'object' ||
+    typeof (point as Point).x !== 'number' || !Number.isFinite((point as Point).x) ||
+    typeof (point as Point).y !== 'number' || !Number.isFinite((point as Point).y)
+  ) {
+    delete ref.anchorPoint;
+  }
 }
 
 function isFreeTool(value: unknown): value is FreeTool {
@@ -1603,7 +2083,24 @@ function isFixedFreeSegmentRef(value: unknown): value is FreeSegmentRef {
 }
 
 function isStaticFreeLabelRef(value: unknown): boolean {
-  return isFixedFreeSegmentRef(value) || (isFreeSegmentRef(value) && value.kind === 'lotus-arc');
+  return isFixedFreeSegmentRef(value) || (
+    isFreeSegmentRef(value) && (value.kind === 'lotus-arc' || value.kind === 'c-union-boundary')
+  );
+}
+
+function isAllowedCUnionLabelPair(
+  first: FreeSegmentRef | null | undefined,
+  second: FreeSegmentRef | null | undefined,
+): boolean {
+  const boundaryCount = (first?.kind === 'c-union-boundary' ? 1 : 0)
+    + (second?.kind === 'c-union-boundary' ? 1 : 0);
+  if (boundaryCount === 0) return true;
+  if (boundaryCount !== 1) return false;
+  const other = first?.kind === 'c-union-boundary' ? second : first;
+  return other == null
+    || other.kind === 'hex-edge'
+    || other.kind === 'half-diagonal'
+    || (other.kind === 'triangle-edge' && other.triangleId !== 'C');
 }
 
 function isFreeLabel(value: unknown): value is FreeLabel {
@@ -1618,7 +2115,9 @@ function isFreeLabel(value: unknown): value is FreeLabel {
     return false;
   }
   if (label.mode === 'dynamic') {
-    return isFreeSegmentRef(label.first) && isFreeSegmentRef(label.second);
+    return isFreeSegmentRef(label.first)
+      && isFreeSegmentRef(label.second)
+      && isAllowedCUnionLabelPair(label.first, label.second);
   }
   if (label.point === null) return false;
   const first = label.first;
@@ -1631,8 +2130,9 @@ function isFreeLabel(value: unknown): value is FreeLabel {
   ) {
     return true;
   }
-  return (first === null || first === undefined || isStaticFreeLabelRef(first)) &&
-    (second === null || second === undefined || isStaticFreeLabelRef(second));
+  const refsValid = (first === null || first === undefined || isStaticFreeLabelRef(first))
+    && (second === null || second === undefined || isStaticFreeLabelRef(second));
+  return refsValid && isAllowedCUnionLabelPair(first, second);
 }
 
 function setFreeStateStatus(text: string, isError = false): void {
@@ -1707,7 +2207,7 @@ function normalizeTargetTRef(ref: FreeNamedPointRef | undefined): void {
 function loadFreeSnapshot(raw: string): void {
   const parsed = JSON.parse(raw) as RawFreeSnapshot;
   if (
-    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7) ||
+    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6 && parsed.version !== 7 && parsed.version !== 8) ||
     !Array.isArray(parsed.triangles) ||
     parsed.triangles.length !== 7
   ) {
@@ -1719,6 +2219,17 @@ function loadFreeSnapshot(raw: string): void {
   if (parsed.tool !== undefined && !isFreeTool(parsed.tool)) {
     throw new Error('Invalid free snapshot tool.');
   }
+  if (parsed.cForm !== undefined && parsed.cForm !== 'triangle' && parsed.cForm !== 'c-union') {
+    throw new Error('Invalid free snapshot C form.');
+  }
+  if (
+    parsed.cUnionCeFilter !== undefined &&
+    parsed.cUnionCeFilter !== 'ce1' &&
+    parsed.cUnionCeFilter !== 'ce2' &&
+    parsed.cUnionCeFilter !== 'both'
+  ) {
+    throw new Error('Invalid free snapshot Cunion filter.');
+  }
   if (parsed.targetT !== undefined && (typeof parsed.targetT !== 'number' || !Number.isFinite(parsed.targetT))) {
     throw new Error('Invalid free snapshot t.');
   }
@@ -1729,6 +2240,12 @@ function loadFreeSnapshot(raw: string): void {
     throw new Error('Invalid free snapshot labels.');
   }
   const labels = Array.isArray(parsed.labels) ? parsed.labels : [];
+  for (const label of labels) {
+    if (!label || typeof label !== 'object') continue;
+    const refs = label as { first?: unknown; second?: unknown };
+    sanitizeCUnionBoundaryAnchor(refs.first);
+    sanitizeCUnionBoundaryAnchor(refs.second);
+  }
   if (!labels.every(isFreeLabel)) {
     throw new Error('Invalid free snapshot labels.');
   }
@@ -1759,7 +2276,7 @@ function loadFreeSnapshot(raw: string): void {
     selectedSegments: [],
     pointSeeds,
     selectedPointSeedId,
-    sampling: parsed.version === 4 || parsed.version === 5 || parsed.version === 6 || parsed.version === 7 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
+    sampling: parsed.version >= 4 ? sanitizeSamplingStore(parsed.sampling) : { v: [], c: [], rejected: [] },
   } as FreeState;
   delete (freeState as RawFreeSnapshot).targetT;
   delete (freeState as RawFreeSnapshot).targetTFixed;
@@ -1769,9 +2286,14 @@ function loadFreeSnapshot(raw: string): void {
       normalizeTargetTRef(triangle.vd0.rawSources?.[coordinate]);
     }
   }
+  if (freeState.cForm === 'c-union') {
+    if (freeState.tool === 'sample') freeState.tool = 'move';
+    if (freeState.selectedTriangleId === 'C') freeState.selectedTriangleId = 'V4';
+    ensureCUnionModel();
+  }
   sampleModeSavedTriangleStates = null;
   freeInitializedFromCurrent = true;
-  refreshLabels(freeState);
+  refreshLabels(freeState, cUnionModel);
 }
 
 function syncFreeStrictEps(projectConstraints = false): void {
@@ -1782,10 +2304,43 @@ function syncFreeStrictEps(projectConstraints = false): void {
   freeState.strictEps = nextStrictEps;
   if (projectConstraints) {
     for (const triangle of freeState.triangles) {
-      projectTriangleToConstraints(freeState, triangle);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
     }
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
   }
+}
+
+function scheduleCUnionRender(): void {
+  if (cUnionRenderPending) return;
+  cUnionRenderPending = true;
+  requestAnimationFrame(() => {
+    cUnionRenderPending = false;
+    render();
+  });
+}
+
+function ensureCUnionModel(): void {
+  if (cUnionBuildState !== 'idle') return;
+  cUnionBuildState = 'building';
+  cUnionBuildProgress = 0;
+  void buildCUnionModel((progress) => {
+    cUnionBuildProgress = Math.max(0, Math.min(1, progress));
+    scheduleCUnionRender();
+  }).then((model) => {
+    cUnionModel = model;
+    cUnionBuildState = 'ready';
+    cUnionBuildProgress = 1;
+    cUnionBuildError = '';
+    if (freeState.cForm === 'c-union') {
+      refreshLabels(freeState, model);
+      autoPlaceAllFreeVd0FromControls();
+    }
+    scheduleCUnionRender();
+  }).catch((error: unknown) => {
+    cUnionBuildState = 'error';
+    cUnionBuildError = error instanceof Error ? error.message : 'Cunion construction failed.';
+    scheduleCUnionRender();
+  });
 }
 
 function samplingStore(): SamplingStore {
@@ -1850,6 +2405,40 @@ function setFreeTool(nextTool: FreeTool): void {
   }
 }
 
+function setFreeCForm(nextForm: FreeState['cForm']): void {
+  if (freeState.cForm === nextForm) return;
+  if (freeState.tool === 'sample') {
+    leaveSampleMode();
+    freeState.tool = 'move';
+  }
+  freeState.cForm = nextForm;
+  freeState.selectedSegments = [];
+  if (nextForm === 'c-union' && freeState.selectedTriangleId === 'C') {
+    freeState.selectedTriangleId = 'V4';
+  }
+  freeState.status = nextForm === 'c-union'
+    ? 'Cunion form: move or constrain V triangles.'
+    : 'Triangle form: move or constrain C and V triangles.';
+  refreshLabels(freeState, cUnionModel);
+  if (nextForm === 'c-union') {
+    ensureCUnionModel();
+  }
+  if (nextForm === 'triangle' || cUnionModel) {
+    autoPlaceAllFreeVd0FromControls();
+  }
+}
+
+function setCUnionFilter(filter: FreeState['cUnionCeFilter']): void {
+  if (freeState.cUnionCeFilter === filter) return;
+  freeState.cUnionCeFilter = filter;
+  freeState.selectedSegments = [];
+  freeState.status = `Cunion filter: ${filter.toUpperCase()}.`;
+  refreshLabels(freeState, cUnionModel);
+  if (cUnionModel) {
+    autoPlaceAllFreeVd0FromControls();
+  }
+}
+
 function captureCurrentSample(): void {
   if (freeState.tool !== 'sample') return;
   enterSampleMode();
@@ -1884,11 +2473,14 @@ function autoPlaceAllFreeVd0FromControls(): void {
   if (!freeState.triangles.some((triangle) => triangle.id !== 'C' && triangle.vd0.enabled)) {
     return;
   }
-  const result = autoPlaceAllFreeVd0Triangles(freeState);
-  refreshLabels(freeState);
+  if (freeState.cForm === 'c-union' && !cUnionModel) {
+    return;
+  }
+  const result = autoPlaceAllFreeVd0Triangles(freeState, cUnionModel);
+  refreshLabels(freeState, cUnionModel);
   const failureText = result.ok ? '' : result.failedIds.map((id) => {
     const triangle = getTriangle(freeState, id);
-    const status = getFreeVd0Status(freeState, triangle);
+    const status = getFreeVd0Status(freeState, triangle, cUnionModel);
     const maxLabel = triangle.vd0.mode === 'max-c' ? 'max c' : triangle.vd0.mode === 'max-a' ? 'max a' : 'max b';
     return status
       ? `${id} raw=(${status.raw.a.toFixed(3)}, ${status.raw.b.toFixed(3)}, ${status.raw.c.toFixed(3)}), ${maxLabel}=${status.max.toFixed(3)}`
@@ -2141,7 +2733,15 @@ function clearTargetTReferences(targetTId: string): void {
   }
 }
 
-function renderFreePanel(validation: FreeValidationResult): void {
+function renderFreePanel(validation: FreeValidationResult, cUnionReady: boolean): void {
+  const cFormControls = (['triangle', 'c-union'] as const).map((form) =>
+    `<button type="button" class="free-button${freeState.cForm === form ? ' is-active' : ''}" data-free-c-form="${form}">${form === 'c-union' ? 'Cunion' : 'triangle'}</button>`,
+  ).join('');
+  const cUnionFilterControls = freeState.cForm === 'c-union'
+    ? (['ce1', 'ce2', 'both'] as const).map((filter) =>
+      `<button type="button" class="free-button${freeState.cUnionCeFilter === filter ? ' is-active' : ''}" data-c-union-filter="${filter}">${filter.toUpperCase()}</button>`,
+    ).join('')
+    : '';
   const targetButtons = (['S_HALF', 'S_T', 'S', 'BENZENE', 'LOTUS'] as FreeTarget[]).map((target) =>
     `<button type="button" class="free-button${freeState.target === target ? ' is-active' : ''}" data-free-target="${target}">${describeTarget(target)}</button>`,
   ).join('');
@@ -2157,7 +2757,10 @@ function renderFreePanel(validation: FreeValidationResult): void {
         </span>
       `).join('')}`
     : '';
-  const toolButtons = (['move', 'd-mark', 's-mark', 'sample', 'point'] as FreeTool[]).map((tool) =>
+  const freeTools: FreeTool[] = freeState.cForm === 'c-union'
+    ? ['move', 'd-mark', 's-mark', 'point']
+    : ['move', 'd-mark', 's-mark', 'sample', 'point'];
+  const toolButtons = freeTools.map((tool) =>
     `<button type="button" class="free-button${freeState.tool === tool ? ' is-active' : ''}" data-free-tool="${tool}">${tool}</button>`,
   ).join('');
   const pointControls = `
@@ -2169,31 +2772,39 @@ function renderFreePanel(validation: FreeValidationResult): void {
     </div>`;
   const statuses = new Map(validation.constraintStatuses.map((status) => [status.triangleId, status]));
 
-  const triangleRows = freeState.triangles.map((triangle) => {
+  const triangleRows = freeState.triangles.filter((triangle) =>
+    freeState.cForm === 'triangle' || triangle.id !== 'C',
+  ).map((triangle) => {
     const status = statuses.get(triangle.id);
     const midpoints = allowedMidpointIndices(triangle.id).map((index) =>
       `<label><input type="checkbox" data-midpoint="${triangle.id}:${index}"${triangle.midpointConstraints[index] ? ' checked' : ''}/>M${index}</label>`,
     ).join('');
-    const vd0Status = getFreeVd0Status(freeState, triangle);
+    const vd0Unavailable = freeState.cForm === 'c-union' && !cUnionReady;
+    const vd0Status = vd0Unavailable ? null : getFreeVd0Status(freeState, triangle, cUnionModel);
+    const vd0SuspensionReason = vd0Unavailable && triangle.vd0.enabled
+      ? 'Vd0 unavailable until Cunion is ready.'
+      : getFreeVd0SuspensionReason(freeState, triangle, cUnionModel);
     const vd0MaxLabel = triangle.vd0.mode === 'max-c' ? 'max c' : triangle.vd0.mode === 'max-a' ? 'max a' : 'max b';
     const vd0RawControls = (['a', 'b', 'c'] as FreeVd0Coordinate[]).map((coordinate) => `
       <label>${coordinate}
-        <select data-vd0-raw-source="${triangle.id}:${coordinate}"${triangle.vd0.enabled ? '' : ' disabled'}>
+        <select data-vd0-raw-source="${triangle.id}:${coordinate}"${triangle.vd0.enabled && !vd0Unavailable ? '' : ' disabled'}>
           ${vd0RawSourceOptions(triangle.id, coordinate)}
         </select>
       </label>
     `).join('');
     const vd0Controls = triangle.id === 'C' || freeState.target === 'LOTUS' ? '' : `
-      <label><input type="checkbox" data-vd0-enabled="${triangle.id}"${triangle.vd0.enabled ? ' checked' : ''}/>Vd0</label>
+      <label><input type="checkbox" data-vd0-enabled="${triangle.id}"${triangle.vd0.enabled ? ' checked' : ''}${vd0Unavailable ? ' disabled' : ''}/>Vd0</label>
       <label>Vd0 mode
-        <select data-vd0-mode="${triangle.id}"${triangle.vd0.enabled ? '' : ' disabled'}>
+        <select data-vd0-mode="${triangle.id}"${triangle.vd0.enabled && !vd0Unavailable ? '' : ' disabled'}>
           <option value="max-c"${triangle.vd0.mode === 'max-c' ? ' selected' : ''}>max c from a,b</option>
           <option value="max-a"${triangle.vd0.mode === 'max-a' ? ' selected' : ''}>max a from b,c</option>
           <option value="max-b"${triangle.vd0.mode === 'max-b' ? ' selected' : ''}>max b from c,a</option>
         </select>
       </label>
       ${vd0RawControls}
-      ${vd0Status ? `<span class="free-small-status">${formatVd0RawStatus(vd0Status, vd0MaxLabel)}</span>` : ''}`;
+      ${vd0SuspensionReason
+        ? `<span class="free-small-status">${escapeHtml(vd0SuspensionReason)}</span>`
+        : vd0Status ? `<span class="free-small-status">${formatVd0RawStatus(vd0Status, vd0MaxLabel)}</span>` : ''}`;
     const edge = triangle.edgePointConstraint;
     const manualPoint = edge?.point.kind === 'manual' ? edge.point.manualPoint : null;
     const edgeControls = `
@@ -2225,17 +2836,23 @@ function renderFreePanel(validation: FreeValidationResult): void {
   }).join('');
 
   const labelRows = freeState.labels.map((label) =>
-    `<div class="free-label-row">${label.name}: ${label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} <button type="button" class="free-button" data-delete-label="${label.id}">delete</button></div>`,
+    `<div class="free-label-row">${label.name}: ${isFreeLabelSuspended(freeState, label, cUnionModel) ? 'suspended' : label.point ? `(${label.point.x.toFixed(3)}, ${label.point.y.toFixed(3)})` : 'invalid'} <button type="button" class="free-button" data-delete-label="${label.id}">delete</button></div>`,
   ).join('');
 
-  freeStatus.textContent = summarizeFreeValidation(validation);
-  freeStatus.style.color = validation.coverageOk && validation.constraintsOk ? '#047857' : '#b91c1c';
+  const cUnionPending = freeState.cForm === 'c-union' && !cUnionReady;
+  freeStatus.textContent = cUnionPending
+    ? cUnionBuildState === 'error' ? `Cunion error: ${cUnionBuildError}` : `Building Cunion ${Math.round(cUnionBuildProgress * 100)}%`
+    : summarizeFreeValidation(validation);
+  freeStatus.style.color = cUnionPending
+    ? cUnionBuildState === 'error' ? '#b91c1c' : '#475569'
+    : validation.coverageOk && validation.constraintsOk ? '#047857' : '#b91c1c';
   freeControls.innerHTML = `
+    <div class="free-toolbar">C form ${cFormControls}${freeState.cForm === 'c-union' ? ` CE filter ${cUnionFilterControls}` : ''}</div>
     <div class="free-toolbar">target ${targetButtons}${targetTControls}</div>
     <div class="free-toolbar">tool ${toolButtons}</div>
     ${pointControls}
-    ${renderSamplingPanel()}
-    <div class="free-row"><span>${freeState.status}</span></div>
+    ${freeState.cForm === 'triangle' ? renderSamplingPanel() : ''}
+    <div class="free-row"><span class="status-reserve">${freeState.status}</span></div>
     ${triangleRows}
     <div class="free-row"><strong>labels</strong></div>
     ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting segments.</div>'}
@@ -2415,7 +3032,7 @@ function renderAbUnionPanel(result: AbUnionRenderResult): void {
       <span>min |a_i+b_i-1|</span><strong>${result.minEqualityGap.toExponential(3)}</strong>
     </div>
     ${equalityWarning}
-    <div class="free-row"><span>${escapeHtml(abUnionState.status)}</span></div>
+    <div class="free-row"><span class="status-reserve">${escapeHtml(abUnionState.status)}</span></div>
     <div class="free-row"><strong>labels</strong></div>
     ${labelRows || '<div class="free-small-status">No labels. Use d-mark or s-mark and click two intersecting sources.</div>'}
     <div class="ab-union-section-title">edge dots</div>
@@ -2511,7 +3128,7 @@ function renderAbHullDebugPanel(result: AbHullDebugResult): void {
       <span>coverage</span><strong class="${coverageClass}">${escapeHtml(coverageText)}</strong>
       <span>vertices</span><strong>${abHullDebugState.vertices.length}${abHullDebugState.closed ? ' closed' : ''}</strong>
       <span>edge directions</span><strong>u, v, u-v</strong>
-      <span>status</span><strong>${escapeHtml(abHullDebugState.status)}</strong>
+      <span>status</span><strong class="status-reserve">${escapeHtml(abHullDebugState.status)}</strong>
     </div>
     <div class="ab-union-section-title">current polygon</div>
     <textarea id="ab-hull-debug-vertices" readonly spellcheck="false">${escapeHtml(result.vertexText)}</textarea>
@@ -2788,7 +3405,7 @@ function renderMaxAreaPanel(): void {
       ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-readout">
-      <span>status</span><strong><span class="${statusClass}">${escapeHtml(status)}</span></strong>
+      <span>status</span><strong><span class="${statusClass} status-reserve">${escapeHtml(status)}</span></strong>
       <span>a</span><strong>${formatAreaNumber(maxAreaState.a)}</strong>
       <span>b</span><strong>${formatAreaNumber(maxAreaState.b)}</strong>
       <span>a+b</span><strong>${formatAreaNumber(maxAreaState.a + maxAreaState.b)}</strong>
@@ -2809,6 +3426,10 @@ function areaConjToolText(tool: AbUnionTool): string {
   if (tool === 's-mark') return 's-mark';
   if (tool === 'f-mark') return 'f mark';
   return tool[0].toUpperCase() + tool.slice(1);
+}
+
+function coreCaseToolText(tool: CoreCaseTool): string {
+  return tool === 'core-point' ? 'Core point' : areaConjToolText(tool);
 }
 
 function areaConjFMarkText(result: AbUnionBoundaryRenderResult | null): string {
@@ -2889,7 +3510,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       ${areaDeltaControlHtml()}
     </div>
     <div class="ab-union-readout">
-      <span>status</span><strong><span class="${staleClass}">${escapeHtml(staleText)}</span></strong>
+      <span>status</span><strong><span class="${staleClass} status-reserve">${escapeHtml(staleText)}</span></strong>
       <span>Σ f_i</span><strong>${totalF.toFixed(6)}</strong>
       <span>Σ (1-f_i)</span><strong>${totalDeficit.toFixed(6)}</strong>
       <span>rows with a_i+b_i &gt; 1</span><strong>${gtOneCount}</strong>
@@ -2900,7 +3521,7 @@ function renderAreaConjPanel(boundary: AbUnionBoundaryRenderResult): void {
       <span>delta</span><strong>${formatAreaNumber(areaConstraintDelta)}</strong>
       <span>f marks</span><strong>${escapeHtml(areaConjFMarkText(boundary))}</strong>
     </div>
-    <div class="free-row"><span>${escapeHtml(areaConjState.status)}</span></div>
+    <div class="free-row"><span class="status-reserve">${escapeHtml(areaConjState.status)}</span></div>
     <div class="ab-union-section-title">region data</div>
     <table class="ab-union-table">
       <thead><tr><th>R_i</th><th>T3</th><th>same a</th><th>same b</th><th>fix current</th><th>=1</th><th>=1+delta</th><th>a_i</th><th>b_i</th><th>a_i+b_i</th><th>f_i</th><th>1-f_i</th><th>state</th></tr></thead>
@@ -2920,49 +3541,86 @@ function countWord(count: number): string {
   return count.toString();
 }
 
-function conj0525ConstraintSummary(): string {
-  const r3 = conj0525Options.forceSum3 ? 'a3+b3=1' : 'a3+b3<=1';
-  const r5 = conj0525Options.forceSum5 ? 'a5+b5=1' : 'a5+b5<=1';
-  return `0525 slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1`;
+function coreCaseConstraintSummary(): string {
+  const r3 = coreCaseOptions.forceSum3 && !coreCaseOptions.relaxedPPoints ? 'a3+b3=1' : 'a3+b3<=1';
+  const r5 = coreCaseOptions.forceSum5 && !coreCaseOptions.relaxedPPoints ? 'a5+b5=1' : 'a5+b5<=1';
+  const model = coreCaseOptions.strictTwoLineSuperset ? 'two-line AB superset' : 'exact AB';
+  const pModel = coreCaseOptions.relaxedPPoints ? 'relaxed P circles' : 'actual P circles';
+  return `Core Case slice: ${r3}, ${r5}, a4+b4>1, a0+b0,a1+b1,a2+b2<=1; ${model}; ${pModel}`;
 }
 
-function hasConj0525Options(options: Conj0521Options | Conj0525Options): options is Conj0525Options {
-  return 'forceSum3' in options && 'forceSum5' in options;
+function syncCoreGraphPanel(): void {
+  const range = coreGraphRenderer.getRange();
+  const sliceK = coreGraphRenderer.getSliceK();
+  const sample = coreGraphRenderer.getSelection();
+  const enabledIds = new Set(coreGraphRenderer.getEnabledPointIds());
+  coreSliceSlider.min = range.min.toString();
+  coreSliceSlider.max = range.max.toString();
+  coreSliceSlider.step = ((range.max - range.min) / 1000).toString();
+  coreSliceSlider.value = sliceK.toString();
+  coreSliceValueLabel.textContent = sliceK.toFixed(6);
+  coreSampleRateSelect.value = coreGraphRenderer.getSampleRate();
+  coreDenseSpecialCurveToggle.checked = coreGraphRenderer.getDenseSpecialCurveSampling();
+  coreSpecialNeighborhoodToggle.checked = coreGraphRenderer.getSpecialCurveNeighborhoodOnly();
+  coreStrictTwoLineToggle.checked = coreGraphRenderer.getStrictTwoLineSuperset();
+  coreRelaxedPToggle.checked = coreGraphRenderer.getRelaxedPPoints();
+  coreGraphStatus.textContent = sample.side === null
+    ? `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}: ${sample.status}`
+    : `selected a=${sample.a.toFixed(4)}, b=${sample.b.toFixed(4)}, f=${sample.side.toFixed(6)} using ${sample.enabledPointCount} points`;
+  corePointControls.innerHTML = `
+    <span>points</span>
+    ${CORE_CASE_POINT_IDS.map((id) => `
+      <label>
+        <input type="checkbox" data-core-graph-point="${escapeHtml(id)}"${enabledIds.has(id) ? ' checked' : ''}/>
+        ${escapeHtml(id)}
+      </label>
+    `).join('')}
+  `;
 }
 
-function renderConjPanel(
-  result: Conj0521RenderResult,
-  constraintsTitle: string,
-  boundaryState: AbUnionState | null = null,
-  options: Conj0521Options | Conj0525Options | null = null,
-  mode: '0521' | '0525' | null = null,
-): void {
-  const boundaryToolControls = boundaryState && mode
-    ? (['move', 'add', 'delete'] as AbUnionTool[]).map((tool) => `
-      <button type="button" class="free-button${boundaryState.tool === tool ? ' is-active' : ''}" data-conj-tool-mode="${mode}" data-conj-tool="${tool}">${areaConjToolText(tool)}</button>
-    `).join('')
-    : '';
-  const boundaryToolbar = boundaryState && mode ? `
+function renderCoreCasePanel(result: CoreCaseRenderResult): void {
+  const boundaryToolControls = (['move', 'add', 'delete', 'core-point'] as CoreCaseTool[]).map((tool) => `
+      <button type="button" class="free-button${coreCaseTool === tool ? ' is-active' : ''}" data-core-case-tool="${tool}">${coreCaseToolText(tool)}</button>
+    `).join('');
+  const boundaryToolbar = `
     <div class="ab-union-toolbar">
       <span>tool</span>
       ${boundaryToolControls}
     </div>
-    <div class="free-row"><span>${escapeHtml(boundaryState.status)}</span></div>
-  ` : '';
-  const hardLimitControls = options && mode ? `
+    <div class="free-row"><span class="status-reserve">${escapeHtml(coreCaseState.status)}</span></div>
+  `;
+  const hardLimitControls = `
     <div class="ab-union-toolbar">
       <span>drag</span>
-      <label><input type="checkbox" data-conj-hard-limit="${mode}"${options.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
+      <label><input type="checkbox" data-core-case-hard-limit${coreCaseOptions.hardLimitDrag ? ' checked' : ''}/>hard limit</label>
     </div>
-  ` : '';
-  const forceControls = options && hasConj0525Options(options) ? `
+  `;
+  const forceControls = `
     <div class="ab-union-toolbar">
       <span>force</span>
-      <label><input type="checkbox" data-conj0525-force-sum="3"${options.forceSum3 ? ' checked' : ''}/>a3+b3=1</label>
-      <label><input type="checkbox" data-conj0525-force-sum="5"${options.forceSum5 ? ' checked' : ''}/>a5+b5=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="3"${coreCaseOptions.forceSum3 && !coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>a3+b3=1</label>
+      <label><input type="checkbox" data-core-case-force-sum="5"${coreCaseOptions.forceSum5 && !coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>a5+b5=1</label>
     </div>
-  ` : '';
-  const optionControls = `${hardLimitControls}${forceControls}`;
+  `;
+  const pPointControls = `
+    <div class="ab-union-toolbar">
+      <span>P circles</span>
+      <label><input type="checkbox" data-core-case-relaxed-p${coreCaseOptions.relaxedPPoints ? ' checked' : ''}/>relaxed P circles</label>
+    </div>
+  `;
+  const dPointControls = `
+    <div class="ab-union-toolbar">
+      <span>D points</span>
+      <label><input type="checkbox" data-core-case-algorithm2-diagonals${coreCaseOptions.algorithm2Diagonals ? ' checked' : ''}/>algorithm 2</label>
+    </div>
+  `;
+  const regionControls = `
+    <div class="ab-union-toolbar">
+      <span>AB model</span>
+      <label><input type="checkbox" data-core-case-strict-two-line${coreCaseOptions.strictTwoLineSuperset ? ' checked' : ''}/>two-line AB superset</label>
+    </div>
+  `;
+  const optionControls = `${hardLimitControls}${forceControls}${pPointControls}${dPointControls}${regionControls}`;
   const rowHtml = result.rows.map((row) => `
     <tr>
       <td>R${row.index}</td>
@@ -2973,27 +3631,34 @@ function renderConjPanel(
       <td><span class="ab-union-pill ${row.ok ? 'is-good' : 'is-warn'}">${row.ok ? 'ok' : 'check'}</span></td>
     </tr>
   `).join('');
-  const pointHtml = result.points.map((item) => `
+  const pointHtml = result.points.map((item) => {
+    const xText = !item.enabled ? 'off' : item.point ? item.point.x.toFixed(5) : 'missing';
+    const yText = !item.enabled ? 'off' : item.point ? item.point.y.toFixed(5) : 'missing';
+    return `
     <tr>
+      <td><input type="checkbox" data-core-case-point="${escapeHtml(item.id)}"${item.enabled ? ' checked' : ''}/></td>
       <td>${escapeHtml(item.id)}</td>
       <td>${escapeHtml(item.label)}</td>
-      <td>${item.point ? item.point.x.toFixed(5) : 'missing'}</td>
-      <td>${item.point ? item.point.y.toFixed(5) : 'missing'}</td>
+      <td>${xText}</td>
+      <td>${yText}</td>
     </tr>
-  `).join('');
-  const edgeRowsHtml = boundaryState ? result.base.edgeRows.map((row) => `
+  `;
+  }).join('');
+  const edgeRowsHtml = result.base.edgeRows.map((row) => `
     <tr>
       <td>e${row.index}</td>
       <td>${row.split ? 'two' : 'one'}</td>
       <td>${row.left.toFixed(4)}</td>
       <td>${row.right.toFixed(4)}</td>
     </tr>
-  `).join('') : '';
-  const sideText = result.triangle ? result.triangle.side.toFixed(6) : 'missing points';
+  `).join('');
+  const sideText = result.triangle
+    ? result.triangle.side.toFixed(6)
+    : result.enabledPointCount === 0 ? 'no points selected' : 'missing points';
   const sideClass = result.triangle && result.triangle.side <= 1
     ? 'ab-union-ok'
     : result.triangle ? 'ab-union-bad' : '';
-  const pointCount = result.points.length;
+  const pointCount = result.enabledPointCount;
 
   abUnionControls.innerHTML = `
     ${boundaryToolbar}
@@ -3002,23 +3667,21 @@ function renderConjPanel(
       <span>${pointCount}-point triangle side</span><strong class="${sideClass}">${escapeHtml(sideText)}</strong>
       <span>a4+b4-1</span><strong>${result.strictGap.toExponential(3)}</strong>
       <span>X values</span><strong>${escapeHtml(formatTuple(result.tValues))}</strong>
-      <span>status</span><strong>${escapeHtml(result.status)}</strong>
+      <span>status</span><strong class="status-reserve">${escapeHtml(result.status)}</strong>
     </div>
-    <div class="ab-union-section-title">${escapeHtml(constraintsTitle)}</div>
+    <div class="ab-union-section-title">Core Case constraints</div>
     <table class="ab-union-table">
       <thead><tr><th>R</th><th>a</th><th>b</th><th>a+b</th><th>constraint</th><th>state</th></tr></thead>
       <tbody>${rowHtml}</tbody>
     </table>
-    ${boundaryState ? `
-      <div class="ab-union-section-title">edge dots</div>
-      <table class="ab-union-table">
-        <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
-        <tbody>${edgeRowsHtml}</tbody>
-      </table>
-    ` : ''}
-    <div class="ab-union-section-title">${countWord(pointCount)} points</div>
+    <div class="ab-union-section-title">edge dots</div>
     <table class="ab-union-table">
-      <thead><tr><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
+      <thead><tr><th>edge</th><th>dots</th><th>left</th><th>right</th></tr></thead>
+      <tbody>${edgeRowsHtml}</tbody>
+    </table>
+    <div class="ab-union-section-title">${countWord(pointCount)} selected points</div>
+    <table class="ab-union-table">
+      <thead><tr><th>use</th><th>id</th><th>source</th><th>x</th><th>y</th></tr></thead>
       <tbody>${pointHtml}</tbody>
     </table>
   `;
@@ -3040,8 +3703,8 @@ function isCoverOverlayAvailable(): boolean {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'conj-0521' &&
-    shapeMode !== 'conj-0525';
+    shapeMode !== 'core-case' &&
+    shapeMode !== 'core-graph';
 }
 
 function syncPointToolControls(): void {
@@ -3051,8 +3714,8 @@ function syncPointToolControls(): void {
     shapeMode !== 'ab-hull-debug' &&
     shapeMode !== 'max-area' &&
     shapeMode !== 'area-conj' &&
-    shapeMode !== 'conj-0521' &&
-    shapeMode !== 'conj-0525';
+    shapeMode !== 'core-case' &&
+    shapeMode !== 'core-graph';
   pointToolPanel.hidden = !visible;
   pointToolToggle.classList.toggle('is-active', visible && pointToolActive);
   pointDeleteButton.disabled = !freeState.selectedPointSeedId;
@@ -3075,10 +3738,10 @@ function syncModeButtons(): void {
     shapeTitle.textContent = 'Max Area';
   } else if (shapeMode === 'area-conj') {
     shapeTitle.textContent = 'Area Conj';
-  } else if (shapeMode === 'conj-0521') {
-    shapeTitle.textContent = '0521 conj';
-  } else if (shapeMode === 'conj-0525') {
-    shapeTitle.textContent = '0525 conj';
+  } else if (shapeMode === 'core-case') {
+    shapeTitle.textContent = 'Core Case';
+  } else if (shapeMode === 'core-graph') {
+    shapeTitle.textContent = 'Core f(a,b)';
   } else {
     shapeTitle.textContent = 'c_i controls';
   }
@@ -3093,18 +3756,19 @@ function syncModeButtons(): void {
   const abHullDebugActive = shapeMode === 'ab-hull-debug';
   const maxAreaActive = shapeMode === 'max-area';
   const areaConjActive = shapeMode === 'area-conj';
-  const conjActive = shapeMode === 'conj-0521' || shapeMode === 'conj-0525';
-  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
-  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive || graphMode !== 'single';
-  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || conjActive;
+  const coreCaseActive = shapeMode === 'core-case';
+  const coreGraphActive = shapeMode === 'core-graph';
+  sliderRow.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive || graphMode !== 'single';
+  cSlider.disabled = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive || graphMode !== 'single';
+  graphPanel.hidden = freeActive || abUnionActive || abHullDebugActive || maxAreaActive || areaConjActive || coreCaseActive || coreGraphActive;
   freePanel.hidden = !freeActive;
-  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !conjActive;
+  abUnionPanel.hidden = !abUnionActive && !abHullDebugActive && !maxAreaActive && !areaConjActive && !coreCaseActive;
+  coreGraphPanel.hidden = !coreGraphActive;
   abUnionPanelTitle.textContent = abHullDebugActive
     ? 'AB hull debug'
     : shapeMode === 'max-area' ? 'Max Area'
       : shapeMode === 'area-conj' ? 'Area Conj'
-        : shapeMode === 'conj-0521' ? '0521 conj'
-          : shapeMode === 'conj-0525' ? '0525 conj' : 'ab union region';
+        : shapeMode === 'core-case' ? 'Core Case' : 'ab union region';
   freeInteractionApi?.setEnabled(freeActive);
   coverOverlayToggle.disabled = !isCoverOverlayAvailable();
   coverOverlayToggle.checked = showCoverOverlay && isCoverOverlayAvailable();
@@ -3169,24 +3833,33 @@ function render(): void {
   if (shapeMode === 'free') {
     initializeFreeFromCurrentIfNeeded();
     syncFreeStrictEps();
-    captureCurrentSample();
-    refreshLabels(freeState);
-    currentFreeValidation = validateFreeState(freeState);
+    if (freeState.cForm === 'c-union') {
+      ensureCUnionModel();
+    } else {
+      captureCurrentSample();
+    }
+    const cUnionReady = freeState.cForm !== 'c-union' || cUnionModel !== null;
+    refreshLabels(freeState, cUnionModel);
+    currentFreeValidation = validateFreeState(freeState, cUnionModel);
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    drawFreeMode(ctx, currentFreeValidation);
+    drawFreeMode(ctx, currentFreeValidation, cUnionReady);
 
-    gammaValues.textContent = 'free mode: seven independent unit triangles';
+    gammaValues.textContent = freeState.cForm === 'c-union'
+      ? `free mode: Cunion (${freeState.cUnionCeFilter}) + six V triangles`
+      : 'free mode: seven independent unit triangles';
     localCBounds.textContent = freeState.target === 'S_T'
       ? `target = ${describeTarget(freeState.target)}, ${freeState.targetTPoints.map((target) => `${target.id}=${target.t.toFixed(3)}`).join(', ')}`
       : `target = ${describeTarget(freeState.target)}`;
-    localCValues.textContent = `selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`;
+    localCValues.textContent = freeState.cForm === 'c-union'
+      ? `${cUnionReady ? 'sampled closure: 2048 orientations / 4096 rays' : `Cunion ${cUnionBuildState}`}; selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`
+      : `selected = ${freeState.selectedTriangleId}; tool = ${freeState.tool}`;
     ceStatus.textContent = 'CE/g-chain inactive in Free mode';
     ceChainStatus.textContent = 'Free mode uses direct covering checks';
     coverOverlayStatus.textContent = 'Free mode owns triangle overlay';
     regionRenderer.render();
-    renderFreePanel(currentFreeValidation);
+    renderFreePanel(currentFreeValidation, cUnionReady);
     syncControllerSnapshot();
     return;
   }
@@ -3284,50 +3957,62 @@ function render(): void {
     return;
   }
 
-  if (shapeMode === 'conj-0521') {
+  if (shapeMode === 'core-case') {
     manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    const result = renderConj0521(ctx, conj0521State, triangleState, manualLocalCs);
+    const result = renderCoreCase(
+      ctx,
+      coreCaseState,
+      triangleState,
+      manualLocalCs,
+      coreCaseOptions,
+      {
+        disabledPointIds: coreCaseDisabledPointIds,
+        intervalPointFractions: coreCaseIntervalPointFractions,
+      },
+    );
+    pruneCoreCaseDisabledPointIds(result.points.map((point) => point.id));
 
     gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
-    localCBounds.textContent = `0521 slice: a1+b1=a3+b3=a5+b5=1, a4+b4>1`;
+    localCBounds.textContent = coreCaseConstraintSummary();
     localCValues.textContent = result.triangle
-      ? `4-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
-      : `4-point side unavailable: ${result.status}`;
-    ceStatus.textContent = '0521 conj: CE/g-chain inactive';
+      ? `${result.enabledPointCount}-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
+      : `Core Case side unavailable: ${result.status}`;
+    ceStatus.textContent = 'Core Case: CE/g-chain inactive';
     ceStatus.style.color = '#475569';
     ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
     ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = '0521 overlays: circles, four points, enclosing triangle';
+    coverOverlayStatus.textContent = 'Core Case overlays: circles, selected points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
     regionRenderer.render();
-    renderConjPanel(result, '0521 constraints', conj0521State, conj0521Options, '0521');
+    renderCoreCasePanel(result);
     syncControllerSnapshot();
     return;
   }
 
-  if (shapeMode === 'conj-0525') {
-    manualLocalCs = manualLocalCs.map((value) => clampToLocalCMax(value, 1));
+  if (shapeMode === 'core-graph') {
+    const sample = coreGraphRenderer.getSelection();
 
     ctx.clearRect(0, 0, config.canvasSize, config.canvasSize);
     drawHexagon(ctx);
-    const result = renderConj0525(ctx, conj0525State, triangleState, manualLocalCs, conj0525Options);
+    drawCoreCaseGraphSample(ctx, sample);
 
-    gammaValues.textContent = `${formatAbUnionValues('a', result.aValues)}; ${formatAbUnionValues('b', result.bValues)}`;
-    localCBounds.textContent = conj0525ConstraintSummary();
-    localCValues.textContent = result.triangle
-      ? `5-point side = ${result.triangle.side.toFixed(6)}, uncovered samples = ${result.base.uncoveredCount}`
-      : `5-point side unavailable: ${result.status}`;
-    ceStatus.textContent = '0525 conj: CE/g-chain inactive';
+    gammaValues.textContent = `a4=${sample.a.toFixed(6)}, b4=${sample.b.toFixed(6)}, a4+b4-1=${sample.strictGap.toExponential(3)}`;
+    localCBounds.textContent = `Core graph domain: a+b>1 and a^2+ab+b^2<=1; D points use algorithm 2; ${coreGraphRenderer.getStrictTwoLineSuperset() ? 'two-line AB superset' : 'exact AB'}; ${coreGraphRenderer.getRelaxedPPoints() ? 'relaxed P circles' : 'actual P circles'}`;
+    const enabledCoreGraphPoints = sample.points.filter((point) => point.enabled).map((point) => point.id).join(' ');
+    localCValues.textContent = sample.side === null
+      ? `f(a,b) unavailable: ${sample.status}`
+      : `f(a,b) = ${sample.side.toFixed(6)} from ${enabledCoreGraphPoints}`;
+    ceStatus.textContent = 'Core f(a,b): CE/g-chain inactive';
     ceStatus.style.color = '#475569';
-    ceChainStatus.textContent = `strict gap a4+b4-1 = ${result.strictGap.toExponential(3)}`;
-    ceChainStatus.style.color = result.strictGap > 0 ? '#047857' : '#b91c1c';
-    coverOverlayStatus.textContent = '0525 overlays: circles, five points, enclosing triangle';
+    ceChainStatus.textContent = sample.domainStatus;
+    ceChainStatus.style.color = sample.domainOk ? '#047857' : '#b91c1c';
+    coverOverlayStatus.textContent = 'Core graph overlays: selected sample circles, points, enclosing triangle';
     coverOverlayStatus.style.color = '#475569';
-    regionRenderer.render();
-    renderConjPanel(result, '0525 constraints', conj0525State, conj0525Options, '0525');
+    syncCoreGraphPanel();
+    coreGraphRenderer.render();
     syncControllerSnapshot();
     return;
   }
@@ -3438,6 +4123,60 @@ function render(): void {
 cSlider.addEventListener('input', () => {
   const c = parseFloat(cSlider.value);
   cValueLabel.textContent = c.toFixed(2);
+  render();
+});
+
+coreSliceSlider.addEventListener('input', () => {
+  coreGraphRenderer.setSliceK(parseFloat(coreSliceSlider.value));
+  coreSliceValueLabel.textContent = coreGraphRenderer.getSliceK().toFixed(6);
+  render();
+});
+
+coreSampleRateSelect.addEventListener('change', () => {
+  const requested = coreSampleRateSelect.value;
+  if (!isCoreGraphSampleRate(requested)) {
+    return;
+  }
+  coreGraphRenderer.setSampleRate(requested);
+  render();
+});
+
+coreDenseSpecialCurveToggle.addEventListener('change', () => {
+  coreGraphRenderer.setDenseSpecialCurveSampling(coreDenseSpecialCurveToggle.checked);
+  render();
+});
+
+coreSpecialNeighborhoodToggle.addEventListener('change', () => {
+  coreGraphRenderer.setSpecialCurveNeighborhoodOnly(coreSpecialNeighborhoodToggle.checked);
+  render();
+});
+
+coreStrictTwoLineToggle.addEventListener('change', () => {
+  coreGraphRenderer.setStrictTwoLineSuperset(coreStrictTwoLineToggle.checked);
+  render();
+});
+
+coreRelaxedPToggle.addEventListener('change', () => {
+  coreGraphRenderer.setRelaxedPPoints(coreRelaxedPToggle.checked);
+  render();
+});
+
+corePointControls.addEventListener('change', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.coreGraphPoint === undefined) {
+    return;
+  }
+  const requested = target.dataset.coreGraphPoint;
+  if (!CORE_CASE_POINT_IDS.includes(requested)) {
+    return;
+  }
+  const enabled = new Set(coreGraphRenderer.getEnabledPointIds());
+  if (target.checked) {
+    enabled.add(requested);
+  } else {
+    enabled.delete(requested);
+  }
+  coreGraphRenderer.setEnabledPointIds(CORE_CASE_POINT_IDS.filter((id) => enabled.has(id)));
   render();
 });
 
@@ -3555,6 +4294,24 @@ controllerStateLoadButton.addEventListener('click', () => {
 
 freeControls.addEventListener('click', (event) => {
   const target = event.target as HTMLElement;
+  const cFormButton = target.closest<HTMLButtonElement>('[data-free-c-form]');
+  if (cFormButton) {
+    const form = cFormButton.dataset.freeCForm;
+    if (form === 'triangle' || form === 'c-union') {
+      setFreeCForm(form);
+      render();
+    }
+    return;
+  }
+  const cUnionFilterButton = target.closest<HTMLButtonElement>('[data-c-union-filter]');
+  if (cUnionFilterButton) {
+    const filter = cUnionFilterButton.dataset.cUnionFilter;
+    if (filter === 'ce1' || filter === 'ce2' || filter === 'both') {
+      setCUnionFilter(filter);
+      render();
+    }
+    return;
+  }
   const targetButton = target.closest<HTMLButtonElement>('[data-free-target]');
   if (targetButton) {
     freeState.target = targetButton.dataset.freeTarget as FreeTarget;
@@ -3592,7 +4349,7 @@ freeControls.addEventListener('click', (event) => {
   if (addTargetTButton) {
     freeState.targetTPoints.push({ id: nextTargetTId(), t: DEFAULT_TARGET_T, fixed: false });
     freeState.status = 'Added S_t point position.';
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -3603,7 +4360,7 @@ freeControls.addEventListener('click', (event) => {
       freeState.targetTPoints = freeState.targetTPoints.filter((candidate) => candidate.id !== id);
       clearTargetTReferences(id);
       freeState.status = `Deleted ${id}.`;
-      refreshLabels(freeState);
+      refreshLabels(freeState, cUnionModel);
       render();
     }
     return;
@@ -3630,7 +4387,7 @@ freeControls.addEventListener('click', (event) => {
       }
     }
     freeState.status = `Deleted ${id}.`;
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
   }
 });
@@ -3657,7 +4414,7 @@ freeControls.addEventListener('change', (event) => {
     const value = Number((target as HTMLInputElement).value);
     if (point && Number.isFinite(value)) {
       point.t = clamp01(value);
-      refreshLabels(freeState);
+      refreshLabels(freeState, cUnionModel);
     }
     render();
     return;
@@ -3688,8 +4445,8 @@ freeControls.addEventListener('change', (event) => {
     const triangle = getTriangle(freeState, id as FreeTriangleId);
     const index = clampInteger(rawIndex, 0, 5);
     triangle.midpointConstraints[index] = (target as HTMLInputElement).checked;
-    projectTriangleToConstraints(freeState, triangle);
-    refreshLabels(freeState);
+    projectTriangleToConstraints(freeState, triangle, cUnionModel);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -3749,9 +4506,9 @@ freeControls.addEventListener('change', (event) => {
         edgeIndex: clampInteger(target.value, 0, 2),
         point: triangle.edgePointConstraint?.point ?? { kind: 'O' },
       };
-      projectTriangleToConstraints(freeState, triangle);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
     }
-    refreshLabels(freeState);
+    refreshLabels(freeState, cUnionModel);
     render();
     return;
   }
@@ -3764,8 +4521,8 @@ freeControls.addEventListener('change', (event) => {
         edgeIndex: triangle.edgePointConstraint?.edgeIndex ?? 0,
         point,
       };
-      projectTriangleToConstraints(freeState, triangle);
-      refreshLabels(freeState);
+      projectTriangleToConstraints(freeState, triangle, cUnionModel);
+      refreshLabels(freeState, cUnionModel);
       render();
     }
     return;
@@ -3785,8 +4542,8 @@ freeControls.addEventListener('change', (event) => {
     triangle.edgePointConstraint.point.manualPoint = manualXTarget
       ? { x: nextValue, y: current.y }
       : { x: current.x, y: nextValue };
-    projectTriangleToConstraints(freeState, triangle);
-    refreshLabels(freeState);
+    projectTriangleToConstraints(freeState, triangle, cUnionModel);
+    refreshLabels(freeState, cUnionModel);
     render();
   }
 });
@@ -3883,10 +4640,19 @@ abUnionControls.addEventListener('click', async (event) => {
     render();
     return;
   }
-  const conjTool = target.dataset.conjTool;
-  const conjToolMode = target.dataset.conjToolMode;
-  if (conjTool === 'move' || conjTool === 'add' || conjTool === 'delete') {
-    setAbUnionTool(conjToolMode === '0521' ? conj0521State : conj0525State, conjTool);
+  const requestedCoreCaseTool = target.dataset.coreCaseTool;
+  if (
+    requestedCoreCaseTool === 'move' ||
+    requestedCoreCaseTool === 'add' ||
+    requestedCoreCaseTool === 'delete' ||
+    requestedCoreCaseTool === 'core-point'
+  ) {
+    if (requestedCoreCaseTool === 'core-point') {
+      coreCaseState.status = 'Core point mode: drag interval candidates.';
+    } else {
+      setAbUnionTool(coreCaseState, requestedCoreCaseTool);
+    }
+    coreCaseTool = requestedCoreCaseTool;
     render();
     return;
   }
@@ -4067,23 +4833,39 @@ abUnionControls.addEventListener('change', (event) => {
     }
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.conjHardLimit !== undefined) {
-    if (target.dataset.conjHardLimit === '0521') {
-      conj0521Options.hardLimitDrag = target.checked;
-    } else if (target.dataset.conjHardLimit === '0525') {
-      conj0525Options.hardLimitDrag = target.checked;
-    }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseHardLimit !== undefined) {
+    coreCaseOptions.hardLimitDrag = target.checked;
     render();
     return;
   }
-  if (target instanceof HTMLInputElement && target.dataset.conj0525ForceSum !== undefined) {
-    if (target.dataset.conj0525ForceSum === '3') {
-      conj0525Options.forceSum3 = target.checked;
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseForceSum !== undefined) {
+    if (target.dataset.coreCaseForceSum === '3') {
+      setCoreCaseForceSum(3, target.checked);
       render();
-    } else if (target.dataset.conj0525ForceSum === '5') {
-      conj0525Options.forceSum5 = target.checked;
+    } else if (target.dataset.coreCaseForceSum === '5') {
+      setCoreCaseForceSum(5, target.checked);
       render();
     }
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseRelaxedP !== undefined) {
+    setCoreCaseRelaxedPPoints(target.checked);
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseAlgorithm2Diagonals !== undefined) {
+    coreCaseOptions.algorithm2Diagonals = target.checked;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCaseStrictTwoLine !== undefined) {
+    coreCaseOptions.strictTwoLineSuperset = target.checked;
+    render();
+    return;
+  }
+  if (target instanceof HTMLInputElement && target.dataset.coreCasePoint !== undefined) {
+    setCoreCasePointEnabled(target.dataset.coreCasePoint, target.checked);
+    render();
     return;
   }
   if (target instanceof HTMLSelectElement && target.dataset.areaQuality !== undefined) {
@@ -4323,8 +5105,8 @@ setupAbUnionInteraction(
 
 setupAbUnionInteraction(
   canvas,
-  () => shapeMode === 'conj-0521',
-  () => conj0521State,
+  () => shapeMode === 'core-case' && coreCaseTool !== 'core-point',
+  () => coreCaseState,
   triangleState,
   () => manualLocalCs,
   (index, value) => {
@@ -4332,29 +5114,18 @@ setupAbUnionInteraction(
   },
   render,
   {
-    moveDotValue: (state, dot, value) => moveConj0521Dot(state, dot, value, conj0521Options),
+    moveDotValue: (state, dot, value) => moveCoreCaseDot(state, dot, value, coreCaseOptions),
   },
 );
+setupCoreCaseIntervalPointInteraction();
 
-setupAbUnionInteraction(
-  canvas,
-  () => shapeMode === 'conj-0525',
-  () => conj0525State,
-  triangleState,
-  () => manualLocalCs,
-  (index, value) => {
-    manualLocalCs[index] = clampToLocalCMax(value, 1);
-  },
-  render,
-  {
-    moveDotValue: (state, dot, value) => moveConj0525Dot(state, dot, value, conj0525Options),
-  },
-);
-
-freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => {
+freeInteractionApi = setupFreeInteraction(canvas, () => freeState, render, () => cUnionModel, () => {
   if (freeState.tool !== 'sample') {
     autoPlaceAllFreeVd0FromControls();
   }
+  render();
+});
+coreGraphRenderer.setOnSelectionChange(() => {
   render();
 });
 window.addEventListener('resize', () => {

@@ -51,6 +51,7 @@ export type AbUnionLockKind = 'a' | 'b';
 export type AbUnionSumConstraintMode = 'none' | 'current' | 'one' | 'one-plus-delta';
 export type AbUnionLabelMode = 'dynamic' | 'static';
 export type AbUnionCoincidenceRole = 'shared' | 'left' | 'right';
+export type AbUnionLocalRegionVariant = 'exact' | 'strict-two-line-superset';
 export type AbUnionMarkSourceKind =
   | 'hex-edge'
   | 'half-diagonal'
@@ -174,8 +175,14 @@ export interface AbUnionFarPair {
   exceedsUnit: boolean;
 }
 
+export interface AbUnionLocalLineSegment {
+  start: Point;
+  end: Point;
+}
+
 interface AbUnionRenderOptions {
   computeTheta?: boolean;
+  localRegionVariant?: AbUnionLocalRegionVariant;
 }
 
 export interface AbUnionBoundaryRenderResult {
@@ -476,7 +483,97 @@ function containsConeRegion(u: number, v: number, outLen: number, inLen: number)
   return false;
 }
 
-export function containsAbUnionLocal(u: number, v: number, a: number, b: number): boolean {
+function strictTwoLineSupersetPolygon(outLen: number, inLen: number): Point[] | null {
+  const sum = outLen + inLen;
+  const rho = outLen * outLen + outLen * inLen + inLen * inLen;
+  if (sum <= 1 + EPS || rho >= 1 - EPS || outLen <= EPS || inLen <= EPS) return null;
+
+  const dSquared = 4 * rho - 3;
+  if (dSquared < -EPS) return null;
+
+  const h = Math.sqrt(3) / 2;
+  const d = Math.sqrt(Math.max(0, dSquared));
+  const denominator = 2 * rho;
+  const alpha = h * (outLen + 2 * inLen - outLen * d) / denominator;
+  const beta = h * (outLen - inLen + sum * d) / denominator;
+  const gamma = h * (-outLen + inLen + sum * d) / denominator;
+  const delta = h * (2 * outLen + inLen - inLen * d) / denominator;
+  const omega = alpha * delta - gamma * beta;
+  if (
+    alpha <= EPS ||
+    beta <= EPS ||
+    gamma <= EPS ||
+    delta <= EPS ||
+    omega <= EPS
+  ) {
+    return null;
+  }
+
+  const yAxisHit = alpha * outLen / beta;
+  const xAxisHit = delta * inLen / gamma;
+  const p2 = {
+    x: delta * (outLen * alpha - inLen * beta) / omega,
+    y: alpha * (inLen * delta - outLen * gamma) / omega,
+  };
+  if (
+    !Number.isFinite(yAxisHit) ||
+    !Number.isFinite(xAxisHit) ||
+    !Number.isFinite(p2.x) ||
+    !Number.isFinite(p2.y) ||
+    yAxisHit < -EPS ||
+    xAxisHit < -EPS ||
+    p2.x < -EPS ||
+    p2.y < -EPS
+  ) {
+    return null;
+  }
+
+  return [
+    { x: 0, y: 0 },
+    { x: 0, y: Math.max(0, yAxisHit) },
+    { x: Math.max(0, p2.x), y: Math.max(0, p2.y) },
+    { x: Math.max(0, xAxisHit), y: 0 },
+  ];
+}
+
+export function abUnionStrictTwoLineSupersetSegments(a: number, b: number): AbUnionLocalLineSegment[] {
+  const polygon = strictTwoLineSupersetPolygon(b, a);
+  if (polygon === null) return [];
+  return [
+    { start: polygon[1], end: polygon[2] },
+    { start: polygon[2], end: polygon[3] },
+  ];
+}
+
+function containsStrictTwoLineSupersetLocal(u: number, v: number, outLen: number, inLen: number): boolean {
+  const polygon = strictTwoLineSupersetPolygon(outLen, inLen);
+  return polygon === null
+    ? containsConeRegion(u, v, outLen, inLen)
+    : containsConeRegion(u, v, outLen, inLen) || pointInConvexPolygon({ x: u, y: v }, polygon);
+}
+
+function containsLocalRegion(
+  u: number,
+  v: number,
+  outLen: number,
+  inLen: number,
+  variant: AbUnionLocalRegionVariant,
+): boolean {
+  return variant === 'strict-two-line-superset'
+    ? containsStrictTwoLineSupersetLocal(u, v, outLen, inLen)
+    : containsConeRegion(u, v, outLen, inLen);
+}
+
+export function containsAbUnionLocal(
+  u: number,
+  v: number,
+  a: number,
+  b: number,
+  variant: AbUnionLocalRegionVariant = 'exact',
+): boolean {
+  if (variant === 'strict-two-line-superset') {
+    return containsStrictTwoLineSupersetLocal(u, v, b, a);
+  }
   return containsConeRegion(u, v, b, a);
 }
 
@@ -498,10 +595,11 @@ function containsExactRegionLocal(
   v: number,
   outLen: number,
   inLen: number,
+  variant: AbUnionLocalRegionVariant,
 ): boolean {
   return (
     (!state.clipToCornerSectors || inCornerSector(u, v)) &&
-    containsConeRegion(u, v, outLen, inLen)
+    containsLocalRegion(u, v, outLen, inLen, variant)
   );
 }
 
@@ -734,12 +832,13 @@ function buildHexAxisHull(
   regionIndex: number,
   outLen: number,
   inLen: number,
+  variant: AbUnionLocalRegionVariant,
 ): HexAxisHull {
   return buildHexAxisHullFromSamples(
     cache.pixelIndex.length,
     (index) => cache.localU[regionIndex][index],
     (index) => cache.localV[regionIndex][index],
-    (_index, u, v) => containsExactRegionLocal(state, u, v, outLen, inLen),
+    (_index, u, v) => containsExactRegionLocal(state, u, v, outLen, inLen, variant),
     outLen,
     inLen,
     2 / cache.scale,
@@ -774,10 +873,11 @@ function buildHexAxisHulls(
   state: AbUnionState,
   out: number[],
   inc: number[],
+  variant: AbUnionLocalRegionVariant,
 ): Array<HexAxisHull | null> {
   return Array.from({ length: 6 }, (_, index) =>
     shouldUseHexAxisHull(state, out[index], inc[index])
-      ? buildHexAxisHull(cache, state, index, out[index], inc[index])
+      ? buildHexAxisHull(cache, state, index, out[index], inc[index], variant)
       : null,
   );
 }
@@ -808,12 +908,16 @@ function writePixel(data: Uint8ClampedArray, q: number, rgba: readonly [number, 
   data[q + 3] = rgba[3];
 }
 
-function buildMask(cache: MaskCache, state: AbUnionState): number {
+function buildMask(
+  cache: MaskCache,
+  state: AbUnionState,
+  variant: AbUnionLocalRegionVariant = 'exact',
+): number {
   const data = cache.overlay.data;
   data.fill(0);
   const out = Array.from({ length: 6 }, (_, index) => bValue(state, index));
   const inc = Array.from({ length: 6 }, (_, index) => aValue(state, index));
-  const hexAxisHulls = buildHexAxisHulls(cache, state, out, inc);
+  const hexAxisHulls = buildHexAxisHulls(cache, state, out, inc, variant);
   let uncoveredCount = 0;
 
   for (let k = 0; k < cache.pixelIndex.length; k++) {
@@ -824,7 +928,7 @@ function buildMask(cache: MaskCache, state: AbUnionState): number {
       const v = cache.localV[i][k];
       const hull = hexAxisHulls[i];
       const needsExact = state.showOriginalRegion || !state.useAxisAlignedHull || hull === null;
-      const inExact = needsExact && containsExactRegionLocal(state, u, v, out[i], inc[i]);
+      const inExact = needsExact && containsExactRegionLocal(state, u, v, out[i], inc[i], variant);
       if (inExact) exactBits |= 1 << i;
       if (state.useAxisAlignedHull) {
         if (hull ? pointInHexAxisHull(u, v, hull) : inExact) {
@@ -2633,7 +2737,7 @@ function evaluateState(
   tempState.clipToCornerSectors = state.clipToCornerSectors;
   tempState.useAxisAlignedHull = state.useAxisAlignedHull;
   tempState.showOriginalRegion = false;
-  buildMask(cache, tempState);
+  buildMask(cache, tempState, 'exact');
 
   return optimizeThetaForMask(cache, thetaSamples, quality);
 }
@@ -2657,10 +2761,11 @@ export function renderAbUnion(
   normalizeAbUnionState(state);
   enforceAbUnionLocks(state);
   const cache = getMaskCache(config.canvasSize);
+  const localRegionVariant = options.localRegionVariant ?? 'exact';
   refreshAbUnionLabels(state, triangleState);
   applyAbUnionCoincidenceLocks(state);
   enforceAbUnionLocks(state);
-  const uncoveredCount = buildMask(cache, state);
+  const uncoveredCount = buildMask(cache, state, localRegionVariant);
   ctx.drawImage(cache.offscreen, 0, 0, config.canvasSize, config.canvasSize);
   const computeTheta = options.computeTheta ?? true;
   const shouldOptimizeTheta = computeTheta && state.autoOptimizeTheta && state.thetaOptimizationPending;

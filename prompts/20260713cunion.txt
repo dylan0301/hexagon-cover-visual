@@ -1,0 +1,13 @@
+midpoint 하나 고정하고 그걸 포함하면서 걸거치는 C triangle들 (CE1,CE2)을 전부다 union한 set: C union set을 보면 어떨까
+M4를 포함하는거지
+but by symmetry, we assume that the center of the C triangle is left side of the half diagonal r_4
+show me the union
+make a Cunion mode.
+visualize the C union set.
+and we can play and adjust with the other V  triangles just like the free mode.
+use existing functions.
+think and process in english.
+ask me questions for all possible details
+
+actually implement this inside the free mode.
+where we can toggle the c triangle form

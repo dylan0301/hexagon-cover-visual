@@ -22,7 +22,7 @@ const DIAGONALS: [Point, Point][] = [
 export function drawHexagon(ctx: CanvasRenderingContext2D): void {
   const cverts = HEXAGON_VERTICES.map(mathToCanvas);
 
-  // Fill and stroke hexagon
+  // Fill hexagon
   ctx.beginPath();
   ctx.moveTo(cverts[0].x, cverts[0].y);
   for (let i = 1; i < cverts.length; i++) {
@@ -31,6 +31,19 @@ export function drawHexagon(ctx: CanvasRenderingContext2D): void {
   ctx.closePath();
   ctx.fillStyle = '#fff';
   ctx.fill();
+
+  drawHexagonLines(ctx);
+}
+
+export function drawHexagonLines(ctx: CanvasRenderingContext2D): void {
+  const cverts = HEXAGON_VERTICES.map(mathToCanvas);
+
+  ctx.beginPath();
+  ctx.moveTo(cverts[0].x, cverts[0].y);
+  for (let i = 1; i < cverts.length; i++) {
+    ctx.lineTo(cverts[i].x, cverts[i].y);
+  }
+  ctx.closePath();
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 1.5;
   ctx.stroke();

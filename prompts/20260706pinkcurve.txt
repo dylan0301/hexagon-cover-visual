@@ -1,0 +1,11 @@
+I think the pink minimum curve is following:
+let p = 1-b, q=1-a
+then T(p,q) = (p+q)^4-(p+q)^2+pq
+the transition polynomial for admissible set
+fit this
+
+do regression
+all 6 points
+two line AB superset
+relaxed P circle
+mode

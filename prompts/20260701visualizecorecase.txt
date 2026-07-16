@@ -1,0 +1,56 @@
+I want to visualize the following function:
+in the core case
+f(a,b) = a is a4 and b is b4, then the side length of minimal enclosing triangle diameter in the core case.
+we can on toggle algorithm 2, and the 6 points P3 P4 P5 D0 D1 D2.
+the other tools as move add delete core point will be implemented later, not yet
+also the force will be implemented later.
+just reuse the core case codes.
+suggest me how to visualize this 3d graph.
+let me inspect the graph itself, and also let me inspect the slices f(a,b) = k curve for fixed k
+i want to make a new mode of this visualization.
+
+in the left view,
+plot the a_4, b_4 points, and show the ab union region for T4.
+also make toggle boxes for each of the 6 points.
+and sample much more near the boundary of the region a+b>1 a^2+b^2+ab<=1
+
+how are P3 and P5 determined? are they from the intersection of ab union set of T4 and the circle?
+or only the lines of the ab union set of T4 and the circle intersection?
+
+in the plotting P3 and P5 points, if ab union set for T4 is nonempty but P3 and P5 doesn't exist, then plot the P3 and P5
+at the a4 b4 point
+I mean if P5 is missing, P5 becomes the b4/a5 point on the hex edge
+
+make it much denser sampling around the boundary
+
+
+both in core case and core f(a,b) mode,
+color other color which of the points lie on the minimal triangle.
+
+in the core f(a,b) mode, there is local minimum points.
+draw that curve.
+
+make it able to change sample rate in the core f(a,b) mode
+high medium low. high is current.
+
+just reject all old snapshots
+
+remember the pink minimum curve for the 6 points all toggled on.
+make a checkbox where we sample even more around that curve.
+and make the minimum curve for 6 points special and always show it even some points toggled off, color it differently.
+make a checkbox if on, only show the neighborhood of that special curve both in the heatmap and 3d
+
+just delete the special curve showing.
+also, make the default sample rate low because it takes too much time loading. does this help reducing the loading time?
+
+try to figure out the pink minimum curve for the 6 points. try fitting with famous functions
+
+for both core case and f(a,b) core
+make a checkbox
+if checked, then for the a+b>1 case, instead of the ab union set, we use a larger set that contains the ab union set.
+the original ab union set has arc, line, line, arc.
+if we check, then we don't use the arc, we just use two lines extended.
+ask me questions
+
+refer to https://github.com/dylan0301/hexagon-cover-database/blob/main/proof/2XXX_geometric_lemmas/20XX_V_triangle_geometry/2009_ab_union_curve_a_plus_b_gt_1.md
+for ab union curves

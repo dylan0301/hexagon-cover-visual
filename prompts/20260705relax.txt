@@ -1,0 +1,9 @@
+currently we assume a_3+b_3=1 and a_5+b_5=1 though we have checkboxes.
+make another checkbox 
+if we check, then we position the P3 and P5 newly.
+we position P5 as if a_3+b_3=1, a_2+b2=1, a1+b1=1, a0+b0=1. and the circle intersection as before
+we position P3 as if a_5+b_5=1, a_0+b0=1, a1+b1=1, a2+b2=1. and the circle intersection as before
+we do both in core case and f(a,b) core
+ask me questions
+
+note that if this is on, then a_3+b_3=1 and a_5+b_5=1 becomes off. vice versa
