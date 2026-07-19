@@ -1,0 +1,7 @@
+I want to make a new target in the free mode. Call it Benzene
+We plot 6 points, each on the subtriangles of hexagon's center.
+we union it with S.
+
+every other thing should work well with this
+update math.md and freemode.md
+ask me questions

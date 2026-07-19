@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hexagon region explorer</title>
+  <style>
+    :root {
+      --ink: #1f2937;
+      --muted: #697386;
+      --panel: #ffffff;
+      --line: #d7dce5;
+      --canvas-bg: #f5f7fb;
+      --accent: #6d4aff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #f8fafc, #eef2f7);
+    }
+    .app {
+      display: grid;
+      grid-template-columns: minmax(760px, 1fr) 330px;
+      gap: 18px;
+      min-height: 100vh;
+      padding: 18px;
+    }
+    .stage {
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--canvas-bg);
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      width: 760px;
+      height: 680px;
+      touch-action: none;
+      user-select: none;
+    }
+    aside {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.94);
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+      padding: 18px;
+      overflow: auto;
+    }
+    h1 {
+      font-size: 20px;
+      line-height: 1.2;
+      margin: 0 0 10px;
+      letter-spacing: -0.02em;
+    }
+    p {
+      margin: 8px 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .control {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+    label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    output {
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+    input[type="range"] {
+      width: 100%;
+      margin: 12px 0 4px;
+      accent-color: var(--accent);
+    }
+    .readout {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 14px;
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: #f7f8fc;
+      font-size: 13px;
+    }
+    .readout span:nth-child(odd) { color: var(--muted); }
+    .readout span:nth-child(even) {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    th, td {
+      padding: 7px 6px;
+      text-align: right;
+      border-bottom: 1px solid #edf0f5;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 700; }
+    tr.active-row td { background: #f1efff; }
+    .pill {
+      display: inline-block;
+      min-width: 50px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      background: #e7f7ef;
+      color: #157347;
+    }
+    .pill.empty { background: #fff1f2; color: #be123c; }
+    .pill.limit { background: #fff7ed; color: #c2410c; }
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 12px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 12px;
+    }
+    button:hover { border-color: #b8c0ce; background: #fafbff; }
+    code { color: #475569; }
+    @media (max-width: 1080px) {
+      .app { grid-template-columns: 1fr; }
+      aside { max-height: none; }
+      .stage { overflow-x: auto; justify-content: start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="stage">
+      <canvas id="canvas" width="760" height="680" aria-label="Interactive regular hexagon app"></canvas>
+    </div>
+
+    <aside>
+      <h1>Hexagon region explorer</h1>
+      <p>
+        Drag each <code>pᵢ</code> along edge <code>eᵢ=[Vᵢ,Vᵢ₊₁]</code>.  The app shades the union of the six regions
+        <code>Rᵢ</code> inside the regular hexagon <code>H</code>.  Here <code>V₆=V₀</code>.
+      </p>
+      <p>
+        Click <code>Vᵢ</code> to show only the boundary of <code>Rᵢ</code>.  Click <code>pᵢ</code> to show the boundaries of
+        <code>Rᵢ</code> and <code>Rᵢ₊₁</code>.  Click elsewhere to clear boundaries.
+      </p>
+
+      <div class="control">
+        <label for="theta">
+          <span>normal angle θ</span>
+          <output id="thetaOut">30°</output>
+        </label>
+        <input id="theta" type="range" min="0" max="360" step="1" value="30" />
+        <p>
+          The dashed triangle is the minimum-side equilateral triangle with first inward side-normal angle θ
+          containing the currently uncovered part of <code>H</code>.
+        </p>
+        <div class="readout">
+          <span>minimum side</span><span id="sideOut">—</span>
+          <span>uncovered pixels</span><span id="uncoveredOut">—</span>
+          <span>active boundaries</span><span id="activeOut">none</span>
+        </div>
+      </div>
+
+      <button id="resetBtn" type="button">Reset all pᵢ to midpoints</button>
+
+      <div class="control">
+        <label><span>vertex data</span><output>aᵢ, bᵢ, |pᵢpᵢ₋₁|</output></label>
+        <table>
+          <thead>
+            <tr><th>Rᵢ</th><th>aᵢ</th><th>bᵢ</th><th>dᵢ</th><th>state</th></tr>
+          </thead>
+          <tbody id="regionRows"></tbody>
+        </table>
+      </div>
+
+      <p class="control">
+        The shaded union and dashed enclosing triangle are computed from the same high-resolution canvas mask,
+        so the visual and numerical readouts agree with each other.
+      </p>
+    </aside>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const offscreen = document.createElement('canvas');
+  offscreen.width = W;
+  offscreen.height = H;
+  const offctx = offscreen.getContext('2d');
+  const overlayImage = offctx.createImageData(W, H);
+
+  const thetaSlider = document.getElementById('theta');
+  const thetaOut = document.getElementById('thetaOut');
+  const sideOut = document.getElementById('sideOut');
+  const uncoveredOut = document.getElementById('uncoveredOut');
+  const activeOut = document.getElementById('activeOut');
+  const rowsEl = document.getElementById('regionRows');
+  const resetBtn = document.getElementById('resetBtn');
+
+  const SQRT3 = Math.sqrt(3);
+  const EPS = 1e-7;
+  const EPS2 = 1e-12;
+  const CX = W / 2;
+  const CY = H / 2;
+  const SCALE = 255;
+
+  const coverRGBA = [157, 219, 198, 185];
+  const boundaryColors = ['#344e86', '#8a3ffc', '#0f766e', '#b45309', '#be123c', '#475569'];
+
+  const mod6 = i => (i + 6) % 6;
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+
+  const V = Array.from({ length: 6 }, (_, i) => {
+    const ang = i * Math.PI / 3;
+    return { x: Math.cos(ang), y: Math.sin(ang) };
+  });
+
+  const eOut = Array.from({ length: 6 }, (_, i) => ({
+    x: V[mod6(i + 1)].x - V[i].x,
+    y: V[mod6(i + 1)].y - V[i].y
+  }));
+  const eIn = Array.from({ length: 6 }, (_, i) => ({
+    x: V[mod6(i - 1)].x - V[i].x,
+    y: V[mod6(i - 1)].y - V[i].y
+  }));
+
+  let thetaDeg = Number(thetaSlider.value);
+  let t = new Float64Array([0.50, 0.50, 0.50, 0.50, 0.50, 0.50]);
+  let activeRegions = new Array(6).fill(false);
+
+  function worldToScreen(p) {
+    return { x: CX + SCALE * p.x, y: CY - SCALE * p.y };
+  }
+
+  function screenToWorld(x, y) {
+    return { x: (x - CX) / SCALE, y: (CY - y) / SCALE };
+  }
+
+  function hexPath(context) {
+    const p0 = worldToScreen(V[0]);
+    context.beginPath();
+    context.moveTo(p0.x, p0.y);
+    for (let i = 1; i < 6; i++) {
+      const p = worldToScreen(V[i]);
+      context.lineTo(p.x, p.y);
+    }
+    context.closePath();
+  }
+
+  function pointInHex(x, y) {
+    let inside = false;
+    for (let i = 0, j = 5; i < 6; j = i++) {
+      const xi = V[i].x, yi = V[i].y;
+      const xj = V[j].x, yj = V[j].y;
+      const crosses = ((yi > y) !== (yj > y));
+      if (crosses) {
+        const xAtY = (xj - xi) * (y - yi) / (yj - yi) + xi;
+        if (x < xAtY) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  const insideMap = new Int32Array(W * H);
+  insideMap.fill(-1);
+  const pixelIndexList = [];
+  const xWorldList = [];
+  const yWorldList = [];
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const wx = (x + 0.5 - CX) / SCALE;
+      const wy = (CY - (y + 0.5)) / SCALE;
+      if (pointInHex(wx, wy)) {
+        const idx = y * W + x;
+        insideMap[idx] = pixelIndexList.length;
+        pixelIndexList.push(idx);
+        xWorldList.push(wx);
+        yWorldList.push(wy);
+      }
+    }
+  }
+
+  const pixelIndex = Uint32Array.from(pixelIndexList);
+  const xWorld = Float32Array.from(xWorldList);
+  const yWorld = Float32Array.from(yWorldList);
+  const N = pixelIndex.length;
+  const maskBits = new Uint8Array(N);
+
+  const localU = Array.from({ length: 6 }, () => new Float32Array(N));
+  const localV = Array.from({ length: 6 }, () => new Float32Array(N));
+
+  for (let i = 0; i < 6; i++) {
+    const eo = eOut[i];
+    const ei = eIn[i];
+    for (let k = 0; k < N; k++) {
+      const rx = xWorld[k] - V[i].x;
+      const ry = yWorld[k] - V[i].y;
+      const dOut = rx * eo.x + ry * eo.y;
+      const dIn = rx * ei.x + ry * ei.y;
+      localU[i][k] = (4 / 3) * (dOut + 0.5 * dIn);
+      localV[i][k] = (4 / 3) * (0.5 * dOut + dIn);
+    }
+  }
+
+  function pointP(i) {
+    const j = mod6(i + 1);
+    return {
+      x: V[i].x + t[i] * (V[j].x - V[i].x),
+      y: V[i].y + t[i] * (V[j].y - V[i].y)
+    };
+  }
+
+  function incomingLengthAtVertex(i) {
+    return 1 - t[mod6(i - 1)];
+  }
+
+  function outgoingLengthAtVertex(i) {
+    return t[i];
+  }
+
+  // Region predicate for the 120-degree cone.  Here outLen is |V_i p_i| and inLen is |V_i p_{i-1}|.
+  function containsConeRegion(u, v, outLen, inLen) {
+    if (u < -EPS || v < -EPS) return false;
+
+    const a = outLen;
+    const b = inLen;
+    const s2 = a * a + a * b + b * b;
+    if (s2 > 1 + EPS) return false;
+
+    if (a < EPS && b < EPS) {
+      return u * u + v * v - u * v <= 1 + EPS;
+    }
+
+    // Convex hull of the three required points, with care for degenerate one-point/segment cases.
+    if (a > EPS && b > EPS) {
+      if (b * u + a * v <= a * b + EPS) return true;
+    } else if (a > EPS) {
+      if (Math.abs(v) <= EPS && u <= a + EPS) return true;
+    } else if (b > EPS) {
+      if (Math.abs(u) <= EPS && v <= b + EPS) return true;
+    }
+
+    // Unit triangles whose one side is pinned to one of the two cone rays.
+    if (Math.max(a + b, a - u + v, u + b, v) <= 1 + EPS) return true;
+    if (Math.max(a + b, b - v + u, v + a, u) <= 1 + EPS) return true;
+
+    // Moving side through the outgoing point.
+    const du = u - a;
+    const DA2 = du * du + v * v - du * v;
+    if (DA2 > EPS2) {
+      const DA = Math.sqrt(DA2);
+      const P = a * (a - u + v) + b * v;
+      const Q = a * (a - u);
+      const S = a * (a + b - u) + b * (v - u);
+      const ell = Math.max(DA, P / DA) - Math.min(0, Q / DA, S / DA);
+      if (ell <= 1 + EPS) return true;
+    }
+
+    // Moving side through the incoming point.
+    const dv = v - b;
+    const DB2 = u * u + dv * dv - u * dv;
+    if (DB2 > EPS2) {
+      const DB = Math.sqrt(DB2);
+      const P = b * (b - v + u) + a * u;
+      const Q = b * (b - v);
+      const S = b * (a + b - v) + a * (u - v);
+      const ell = Math.max(DB, P / DB) - Math.min(0, Q / DB, S / DB);
+      if (ell <= 1 + EPS) return true;
+    }
+
+    return false;
+  }
+
+  function buildMaskAndOverlay() {
+    const data = overlayImage.data;
+    data.fill(0);
+
+    let uncoveredCount = 0;
+    const out = new Float64Array(6);
+    const inc = new Float64Array(6);
+    for (let i = 0; i < 6; i++) {
+      out[i] = outgoingLengthAtVertex(i);
+      inc[i] = incomingLengthAtVertex(i);
+    }
+
+    for (let k = 0; k < N; k++) {
+      let bits = 0;
+      for (let i = 0; i < 6; i++) {
+        if (containsConeRegion(localU[i][k], localV[i][k], out[i], inc[i])) {
+          bits |= (1 << i);
+        }
+      }
+      maskBits[k] = bits;
+
+      if (bits) {
+        const q = pixelIndex[k] * 4;
+        data[q] = coverRGBA[0];
+        data[q + 1] = coverRGBA[1];
+        data[q + 2] = coverRGBA[2];
+        data[q + 3] = coverRGBA[3];
+      } else {
+        uncoveredCount++;
+      }
+    }
+
+    offctx.putImageData(overlayImage, 0, 0);
+    return uncoveredCount;
+  }
+
+  function lineIntersection(n1, c1, n2, c2) {
+    const det = n1.x * n2.y - n1.y * n2.x;
+    return {
+      x: (c1 * n2.y - n1.y * c2) / det,
+      y: (n1.x * c2 - c1 * n2.x) / det
+    };
+  }
+
+  function computeEnclosingTriangle(uncoveredCount) {
+    if (uncoveredCount === 0) return null;
+
+    const theta = thetaDeg * Math.PI / 180;
+    const normals = [0, 1, 2].map(j => {
+      const a = theta + j * 2 * Math.PI / 3;
+      return { x: Math.cos(a), y: Math.sin(a) };
+    });
+
+    const c = [Infinity, Infinity, Infinity];
+    for (let k = 0; k < N; k++) {
+      if (maskBits[k] !== 0) continue;
+      const x = xWorld[k];
+      const y = yWorld[k];
+      for (let j = 0; j < 3; j++) {
+        const n = normals[j];
+        const p = n.x * x + n.y * y;
+        if (p < c[j]) c[j] = p;
+      }
+    }
+
+    // Pixel-cell safety margin: the mask is made from pixels, not analytic polygons.
+    for (let j = 0; j < 3; j++) {
+      const n = normals[j];
+      c[j] -= 0.5 * (Math.abs(n.x) + Math.abs(n.y)) / SCALE;
+    }
+
+    const side = Math.max(0, -(2 / SQRT3) * (c[0] + c[1] + c[2]));
+    const verts = [
+      lineIntersection(normals[0], c[0], normals[1], c[1]),
+      lineIntersection(normals[1], c[1], normals[2], c[2]),
+      lineIntersection(normals[2], c[2], normals[0], c[0])
+    ];
+    return { normals, c, side, verts };
+  }
+
+  function drawBase() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#f5f7fb';
+    ctx.fillRect(0, 0, W, H);
+
+    hexPath(ctx);
+    ctx.fillStyle = '#fffdf7';
+    ctx.fill();
+
+    ctx.save();
+    ctx.strokeStyle = '#d7dce5';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 6; i++) {
+      const a = worldToScreen(V[i]);
+      const b = worldToScreen(V[mod6(i + 1)]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTriangle(tri) {
+    if (!tri) return;
+    const pts = tri.verts.map(worldToScreen);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
+    ctx.lineTo(pts[2].x, pts[2].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(109, 74, 255, 0.07)';
+    ctx.fill();
+    ctx.setLineDash([8, 6]);
+    ctx.strokeStyle = '#6d4aff';
+    ctx.lineWidth = 2.25;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const centroid = {
+      x: (tri.verts[0].x + tri.verts[1].x + tri.verts[2].x) / 3,
+      y: (tri.verts[0].y + tri.verts[1].y + tri.verts[2].y) / 3
+    };
+    const n = tri.normals[0];
+    const g = worldToScreen(centroid);
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y);
+    ctx.lineTo(g.x + 34 * n.x, g.y - 34 * n.y);
+    ctx.strokeStyle = 'rgba(109, 74, 255, 0.55)';
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(g.x + 34 * n.x, g.y - 34 * n.y, 3.5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#6d4aff';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRegionBoundary(regionIndex) {
+    const bit = 1 << regionIndex;
+    ctx.save();
+    ctx.beginPath();
+    for (let k = 0; k < N; k++) {
+      if ((maskBits[k] & bit) === 0) continue;
+      const idx = pixelIndex[k];
+      const x = idx % W;
+      const y = Math.floor(idx / W);
+
+      let nIdx, nk;
+
+      nIdx = idx - 1;
+      nk = (x > 0) ? insideMap[nIdx] : -1;
+      if (nk < 0 || (maskBits[nk] & bit) === 0) {
+        ctx.moveTo(x, y);
+        ctx.lineTo(x, y + 1);
+      }
+
+      nIdx = idx + 1;
+      nk = (x < W - 1) ? insideMap[nIdx] : -1;
+      if (nk < 0 || (maskBits[nk] & bit) === 0) {
+        ctx.moveTo(x + 1, y);
+        ctx.lineTo(x + 1, y + 1);
+      }
+
+      nIdx = idx - W;
+      nk = (y > 0) ? insideMap[nIdx] : -1;
+      if (nk < 0 || (maskBits[nk] & bit) === 0) {
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + 1, y);
+      }
+
+      nIdx = idx + W;
+      nk = (y < H - 1) ? insideMap[nIdx] : -1;
+      if (nk < 0 || (maskBits[nk] & bit) === 0) {
+        ctx.moveTo(x, y + 1);
+        ctx.lineTo(x + 1, y + 1);
+      }
+    }
+    ctx.strokeStyle = boundaryColors[regionIndex];
+    ctx.globalAlpha = 0.95;
+    ctx.lineWidth = 1.15;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawActiveBoundaries() {
+    for (let i = 0; i < 6; i++) {
+      if (activeRegions[i]) drawRegionBoundary(i);
+    }
+  }
+
+  function drawVerticesAndPoints() {
+    ctx.save();
+
+    hexPath(ctx);
+    ctx.strokeStyle = '#253044';
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+
+    ctx.font = '12px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < 6; i++) {
+      const p = worldToScreen(V[i]);
+      const active = activeRegions[i];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, active ? 6.4 : 5.2, 0, 2 * Math.PI);
+      ctx.fillStyle = active ? '#6d4aff' : '#1f2937';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      const out = worldToScreen({ x: V[i].x * 1.11, y: V[i].y * 1.11 });
+      ctx.fillStyle = '#253044';
+      ctx.fillText(`V${i}`, out.x, out.y);
+    }
+
+    for (let i = 0; i < 6; i++) {
+      const pWorld = pointP(i);
+      const p = worldToScreen(pWorld);
+      const relActive = activeRegions[i] || activeRegions[mod6(i + 1)];
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 7.7, 0, 2 * Math.PI);
+      ctx.fillStyle = relActive ? '#fff3bf' : '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = relActive ? '#d97706' : '#334155';
+      ctx.lineWidth = relActive ? 2.7 : 2.1;
+      ctx.stroke();
+
+      const edgeMid = {
+        x: (V[i].x + V[mod6(i + 1)].x) / 2,
+        y: (V[i].y + V[mod6(i + 1)].y) / 2
+      };
+      const len = Math.hypot(edgeMid.x, edgeMid.y) || 1;
+      const label = worldToScreen({
+        x: pWorld.x + 0.085 * edgeMid.x / len,
+        y: pWorld.y + 0.085 * edgeMid.y / len
+      });
+      ctx.fillStyle = '#475569';
+      ctx.fillText(`p${i}`, label.x, label.y);
+    }
+
+    ctx.restore();
+  }
+
+  function updatePanel(uncoveredCount, tri) {
+    thetaOut.textContent = `${thetaDeg.toFixed(0)}°`;
+    sideOut.textContent = tri ? tri.side.toFixed(5) : 'empty';
+    uncoveredOut.textContent = String(uncoveredCount);
+
+    const active = activeRegions
+      .map((on, i) => on ? `R${i}` : null)
+      .filter(Boolean)
+      .join(', ');
+    activeOut.textContent = active || 'none';
+
+    let html = '';
+    for (let i = 0; i < 6; i++) {
+      const ai = incomingLengthAtVertex(i);
+      const bi = outgoingLengthAtVertex(i);
+      const di = Math.sqrt(ai * ai + ai * bi + bi * bi);
+      const s2 = di * di;
+      let label = 'active';
+      let cls = '';
+      if (s2 > 1 + 1e-5) {
+        label = 'empty';
+        cls = 'empty';
+      } else if (Math.abs(s2 - 1) <= 1e-5) {
+        label = 'limit';
+        cls = 'limit';
+      }
+      html += `<tr class="${activeRegions[i] ? 'active-row' : ''}">
+        <td>R${i}</td>
+        <td>${ai.toFixed(3)}</td>
+        <td>${bi.toFixed(3)}</td>
+        <td>${di.toFixed(3)}</td>
+        <td><span class="pill ${cls}">${label}</span></td>
+      </tr>`;
+    }
+    rowsEl.innerHTML = html;
+  }
+
+  function render() {
+    drawBase();
+    const uncoveredCount = buildMaskAndOverlay();
+    ctx.drawImage(offscreen, 0, 0);
+    const tri = computeEnclosingTriangle(uncoveredCount);
+    drawTriangle(tri);
+    drawActiveBoundaries();
+    drawVerticesAndPoints();
+    updatePanel(uncoveredCount, tri);
+  }
+
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      render();
+    });
+  }
+
+  function canvasPoint(evt) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (evt.clientX - r.left) * W / r.width,
+      y: (evt.clientY - r.top) * H / r.height
+    };
+  }
+
+  function dist2(a, b) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return dx * dx + dy * dy;
+  }
+
+  function hitTest(pos) {
+    let best = { type: null, index: -1, d2: Infinity };
+
+    for (let i = 0; i < 6; i++) {
+      const p = worldToScreen(pointP(i));
+      const d = dist2(pos, p);
+      if (d < best.d2) best = { type: 'p', index: i, d2: d };
+    }
+    for (let i = 0; i < 6; i++) {
+      const p = worldToScreen(V[i]);
+      const d = dist2(pos, p);
+      if (d < best.d2) best = { type: 'v', index: i, d2: d };
+    }
+
+    const radius = best.type === 'p' ? 15 : 13;
+    return best.d2 <= radius * radius ? best : null;
+  }
+
+  function setActiveOnly(regions) {
+    const want = new Set(regions.map(mod6));
+    const same = activeRegions.every((on, i) => on === want.has(i));
+    activeRegions.fill(false);
+    if (!same) {
+      for (const i of want) activeRegions[i] = true;
+    }
+    scheduleRender();
+  }
+
+  function handleClick(hit) {
+    if (!hit) {
+      activeRegions.fill(false);
+      scheduleRender();
+      return;
+    }
+    if (hit.type === 'v') {
+      setActiveOnly([hit.index]);
+    } else if (hit.type === 'p') {
+      setActiveOnly([hit.index, mod6(hit.index + 1)]);
+    }
+  }
+
+  function setDraggedPointFromCanvas(i, pos) {
+    const w = screenToWorld(pos.x, pos.y);
+    const j = mod6(i + 1);
+    const ex = V[j].x - V[i].x;
+    const ey = V[j].y - V[i].y;
+    t[i] = clamp((w.x - V[i].x) * ex + (w.y - V[i].y) * ey, 0, 1);
+  }
+
+  let pointerState = null;
+
+  canvas.addEventListener('pointerdown', evt => {
+    const pos = canvasPoint(evt);
+    const hit = hitTest(pos);
+    pointerState = {
+      id: evt.pointerId,
+      start: pos,
+      last: pos,
+      hit,
+      dragging: hit && hit.type === 'p',
+      moved: false
+    };
+    if (pointerState.dragging) {
+      canvas.style.cursor = 'grabbing';
+    }
+    canvas.setPointerCapture(evt.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', evt => {
+    const pos = canvasPoint(evt);
+
+    if (pointerState && pointerState.dragging) {
+      if (dist2(pos, pointerState.start) > 12) pointerState.moved = true;
+      pointerState.last = pos;
+      setDraggedPointFromCanvas(pointerState.hit.index, pos);
+      scheduleRender();
+      return;
+    }
+
+    const hit = hitTest(pos);
+    canvas.style.cursor = hit ? (hit.type === 'p' ? 'grab' : 'pointer') : 'default';
+  });
+
+  canvas.addEventListener('pointerup', evt => {
+    if (!pointerState) return;
+    const pos = canvasPoint(evt);
+    const moved = pointerState.moved || dist2(pos, pointerState.start) > 16;
+
+    if (pointerState.dragging) {
+      setDraggedPointFromCanvas(pointerState.hit.index, pos);
+      if (!moved) handleClick(pointerState.hit);
+    } else if (!moved) {
+      handleClick(pointerState.hit || hitTest(pos));
+    }
+
+    try { canvas.releasePointerCapture(evt.pointerId); } catch (_) {}
+    pointerState = null;
+    canvas.style.cursor = hitTest(pos) ? 'grab' : 'default';
+    scheduleRender();
+  });
+
+  canvas.addEventListener('pointercancel', evt => {
+    try { canvas.releasePointerCapture(evt.pointerId); } catch (_) {}
+    pointerState = null;
+    canvas.style.cursor = 'default';
+  });
+
+  thetaSlider.addEventListener('input', () => {
+    thetaDeg = Number(thetaSlider.value);
+    scheduleRender();
+  });
+
+  resetBtn.addEventListener('click', () => {
+    t = new Float64Array([0.50, 0.50, 0.50, 0.50, 0.50, 0.50]);
+    activeRegions.fill(false);
+    scheduleRender();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

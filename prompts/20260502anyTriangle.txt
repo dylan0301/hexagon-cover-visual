@@ -1,0 +1,62 @@
+make a free mode
+where we can move all 7 triangles freely and see if it is a valid covering.
+make button for S_{1/2} and S (which to cover)
+in the free mode, don't show the g-chain at the right, instead, show a control panel.
+Make a control panel for constraints for the 7 triangles.
+We still have the constraints of C-trinalge containing center, and each V-triangle containing each vertex.
+We can set each triangle to contain which M_i's. For example, we can constraint that V_3 triangle contains a subset of {M_2,M_3,M_4}
+Since we have to move the triangles with mouse, when two triangles overlap, it may be hard to move.
+So in the control panel, add checkboxes to fix the triangles for each triangle.
+there is a move mode at control panel where we can move triangles, and this is default mode.
+Also add a feature: when two line segments intersect (ex: half diagonal and one edge of triangle)
+we first click a mark at control panel, then when we select two line segments, then the intersection point is labeled.
+When we move triangles, when we select an edge of triangle and labeld point in the control panel, we add a constriant that the edge passes the point.
+make the code structure such that more features can be added.
+ask me as many questions as possible
+
+also add hide buttons able to hide only when fixed. hidden triangles are unable to move.
+
+for each edge of triangle, show a label of which edge this is. just saying edge 0 1 2, i don't know which is which from the figure
+Also, for free mode, just don't show the map graph.
+For the mark tool, when we select line segments, highlight the selected segment
+
+I didn't want to see map graph in the free mode.
+What i meant by this is not just making the word map graph invisible, but the entire graph and compose chain g_c ...etc buttons invisible
+
+
+- 2026.05.02 at night
+
+in the control panel, for v-triangles, make a Vd0 checkbox.
+If checkbox is on, then we use the classical admissible set.
+There is a case when we look at a half diagonal, there are more than 1 disjoint intervals covered,
+so the c value for the admissible set is the most far uncovered point.
+there is ambiguity when using admissible set. 
+there are 3 choices:
+1. when a,b is given, we choose the max possible c
+2. when b,c is given, we choose the max possible a
+3. when c,a is given, we choose the max possible b
+let me select those.
+ask me questions
+
+when i select the Vd0 mode, I want the v-triangles to move automatically to that position
+
+still not working as i intended.
+one strange thing is that when i move v0 triangle, the interface a,b value for v1 triangle both changes.
+but i think only one of a or b value should move?? what does the a,b,c value show?
+I thought it should show the current uncovered values.
+
+display the raw uncovered a,b,c
+and i still always see vd0 auto place failed. what is problem?
+ask me many questions, i think your understanding and my requirements are differnet
+
+
+i don't understand how a vd0 auto place can even fail.
+it computes the possible admissible set for a triangle to realize
+run simulation yourself and report me 
+
+how is triangle mode (not free mode) visuializing v-triangle work?
+i think that uses the same logic that realizes the a,b,c containing. 
+use the same function here
+
+i think a,b,c value is computed wrong at some cases.
+they should be distance from V_i to farthest point uncovered distance on that edge. but i see some 1- distance from V_i

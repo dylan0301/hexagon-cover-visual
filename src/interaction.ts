@@ -14,6 +14,7 @@ import {
 } from './geometry';
 import { HEXAGON_VERTICES } from './hexagon';
 import { CIRCUMRADIUS, getVertices, getValidRegion } from './triangle';
+import { pointInHexagon, type SymmetricPointSeed } from './symmetricPoints';
 
 const LOCAL_C_HIT_PX = 8;
 const LOCAL_C_RAY_HIT_PX = 10;
@@ -22,8 +23,22 @@ const BORDER_HIT_PX = 6;
 const START_EDGE_HIT_PX = 8;
 const HALF_DIAGONAL_HIT_PX = 10;
 const CLICK_CANCEL_DISTANCE_PX = 6;
+const POINT_SEED_HIT_PX = 9;
 const PEN_HIT_SCALE = 1.35;
 const TOUCH_HIT_SCALE = 1.75;
+
+export interface StartValueSegment {
+  start: Point;
+  end: Point;
+}
+
+export interface PointToolInteraction {
+  isActive(): boolean;
+  seeds(): SymmetricPointSeed[];
+  create(point: Point): void;
+  move(seedId: string, point: Point): void;
+  select(seedId: string): void;
+}
 
 export function setupInteraction(
   canvas: HTMLCanvasElement,
@@ -34,8 +49,10 @@ export function setupInteraction(
   onLocalCChange: (index: number, value: number) => void,
   render: () => void,
   onStartValueSelect?: (value: number) => void,
+  getStartValueSegment?: () => StartValueSegment | null,
   onHalfDiagonalHover?: (index: number | null) => void,
   onHalfDiagonalToggle?: (index: number) => void,
+  pointTool?: PointToolInteraction,
 ): void {
   let interaction: InteractionState = { kind: 'idle' };
   let activePointerId: number | null = null;
@@ -146,6 +163,32 @@ export function setupInteraction(
     return bestIndex;
   }
 
+  function isPointToolActive(): boolean {
+    const shapeMode = getShapeMode();
+    return !!pointTool?.isActive() &&
+      shapeMode !== 'free' &&
+      shapeMode !== 'ab-union' &&
+      shapeMode !== 'ab-hull-debug' &&
+      shapeMode !== 'core-case' &&
+      shapeMode !== 'core-graph';
+  }
+
+  function getPointSeedUnderPoint(mouse: Point, pointerType: string): string | null {
+    if (!isPointToolActive() || !pointTool) {
+      return null;
+    }
+    const maxDistance = scaleToMath(POINT_SEED_HIT_PX * getHitScale(pointerType));
+    let best: { id: string; distance: number } | null = null;
+    for (const seed of pointTool.seeds()) {
+      const seedDistance = distance(mouse, seed.point);
+      if (seedDistance > maxDistance || seedDistance >= (best?.distance ?? Infinity)) {
+        continue;
+      }
+      best = { id: seed.id, distance: seedDistance };
+    }
+    return best?.id ?? null;
+  }
+
   function hitTest(mouse: Point, pointerType: string): HitTarget {
     const hitScale = getHitScale(pointerType);
     const localCHandleIndex =
@@ -156,7 +199,14 @@ export function setupInteraction(
 
     const shapeMode = getShapeMode();
 
-    if (shapeMode === 'local-c') {
+    if (
+      shapeMode === 'local-c' ||
+      shapeMode === 'free' ||
+      shapeMode === 'ab-union' ||
+      shapeMode === 'ab-hull-debug' ||
+      shapeMode === 'core-case' ||
+      shapeMode === 'core-graph'
+    ) {
       return { kind: 'none' };
     }
 
@@ -179,27 +229,32 @@ export function setupInteraction(
     return { kind: 'none' };
   }
 
+  function getActiveStartValueSegment(): StartValueSegment {
+    return getStartValueSegment?.() ?? {
+      start: HEXAGON_VERTICES[0],
+      end: HEXAGON_VERTICES[5],
+    };
+  }
+
   function projectStartValue(mouse: Point): number {
-    const start = HEXAGON_VERTICES[5];
-    const end = HEXAGON_VERTICES[0];
+    const { start, end } = getActiveStartValueSegment();
     const closest = closestPointOnSegment(mouse, start, end);
     const edge = {
-      x: start.x - end.x,
-      y: start.y - end.y,
+      x: end.x - start.x,
+      y: end.y - start.y,
     };
     const edgeLen2 = edge.x * edge.x + edge.y * edge.y;
     if (edgeLen2 === 0) return 0;
 
-    const dx = closest.x - end.x;
-    const dy = closest.y - end.y;
+    const dx = closest.x - start.x;
+    const dy = closest.y - start.y;
     return Math.max(0, Math.min(1, (dx * edge.x + dy * edge.y) / edgeLen2));
   }
 
   function getStartValueFromMouse(mouse: Point, pointerType: string): number | null {
     if (!onStartValueSelect) return null;
 
-    const start = HEXAGON_VERTICES[5];
-    const end = HEXAGON_VERTICES[0];
+    const { start, end } = getActiveStartValueSegment();
     const hitDistance = distanceToSegment(mouse, start, end);
     if (hitDistance > scaleToMath(START_EDGE_HIT_PX * getHitScale(pointerType))) return null;
 
@@ -208,6 +263,15 @@ export function setupInteraction(
 
   function updateCursor(mouse: Point, pointerType: string): void {
     if (pointerType !== 'mouse') {
+      return;
+    }
+
+    if (isPointToolActive()) {
+      if (getPointSeedUnderPoint(mouse, pointerType)) {
+        canvas.style.cursor = 'move';
+      } else {
+        canvas.style.cursor = pointInHexagon(mouse) ? 'crosshair' : 'default';
+      }
       return;
     }
 
@@ -246,9 +310,40 @@ export function setupInteraction(
 
     const pointerType = e.pointerType || 'mouse';
     const mouse = getPointerMath(e);
+    if (isPointToolActive() && pointTool) {
+      const seedId = getPointSeedUnderPoint(mouse, pointerType);
+      if (seedId) {
+        pointTool.select(seedId);
+        interaction = { kind: 'dragging-point-seed', seedId };
+        activePointerId = e.pointerId;
+        activePointerType = pointerType;
+        canvas.setPointerCapture(e.pointerId);
+        render();
+        e.preventDefault();
+        return;
+      }
+      if (pointInHexagon(mouse)) {
+        pointTool.create(mouse);
+        render();
+        e.preventDefault();
+      } else {
+        updateCursor(mouse, pointerType);
+      }
+      return;
+    }
     const halfDiagonalIndex = getHalfDiagonalHoverIndex(mouse, pointerType);
     const hit = hitTest(mouse, pointerType);
     const shapeMode = getShapeMode();
+    if (
+      shapeMode === 'free' ||
+      shapeMode === 'ab-union' ||
+      shapeMode === 'ab-hull-debug' ||
+      shapeMode === 'core-case' ||
+      shapeMode === 'core-graph'
+    ) {
+      updateCursor(mouse, pointerType);
+      return;
+    }
     let startedInteraction = true;
 
     switch (hit.kind) {
@@ -328,6 +423,29 @@ export function setupInteraction(
     const pointerType =
       activePointerId === e.pointerId ? activePointerType : (e.pointerType || 'mouse');
     const mouse = getPointerMath(e);
+    if (
+      getShapeMode() === 'ab-union' ||
+      getShapeMode() === 'ab-hull-debug' ||
+      getShapeMode() === 'core-case' ||
+      getShapeMode() === 'core-graph'
+    ) {
+      return;
+    }
+    if (isPointToolActive() && pointTool) {
+      onHalfDiagonalHover?.(null);
+      if (interaction.kind === 'dragging-point-seed' && activePointerId === e.pointerId) {
+        if (pointInHexagon(mouse)) {
+          pointTool.move(interaction.seedId, mouse);
+          render();
+        }
+        e.preventDefault();
+        return;
+      }
+      if (interaction.kind === 'idle') {
+        updateCursor(mouse, pointerType);
+      }
+      return;
+    }
     onHalfDiagonalHover?.(getHalfDiagonalHoverIndex(mouse, pointerType));
 
     if (interaction.kind === 'idle') {

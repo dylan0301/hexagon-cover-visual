@@ -1,0 +1,9 @@
+I want to make a new target in the free mode. Call it S_t.
+we can drag to adjust the value of t in [0,1]
+The distance from C is 1-t.
+we make a point on each half diagonal
+Then we have 6 new points, and we union it with S_{1/2}
+every other thing should work well with this
+update math.md and freemode.md
+ask me questions
+› add a checkbox to fix P_i(t)

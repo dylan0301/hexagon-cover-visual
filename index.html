@@ -20,6 +20,27 @@
           <button type="button" class="shape-button" data-shape-mode="circle">
             Circle
           </button>
+          <button type="button" class="shape-button" data-shape-mode="free">
+            Free
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="ab-union">
+            ab union
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="ab-hull-debug">
+            Hull debug
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="max-area">
+            Max Area
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="area-conj">
+            Area Conj
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="core-case">
+            Core Case
+          </button>
+          <button type="button" class="shape-button" data-shape-mode="core-graph">
+            Core f(a,b)
+          </button>
         </div>
         <div id="strict-check-panel">
           <label id="strict-check-toggle-row" for="strict-check-toggle">
@@ -59,6 +80,43 @@
             </div>
           </div>
         </div>
+        <div id="cover-overlay-panel">
+          <label id="cover-overlay-toggle-row" for="cover-overlay-toggle">
+            <input type="checkbox" id="cover-overlay-toggle" />
+            <span>Show V<sub>i</sub> triangles</span>
+          </label>
+          <div class="readout" id="cover-overlay-status">cover overlay off</div>
+        </div>
+        <div id="point-tool-panel">
+          <div class="free-toolbar">
+            <span>point</span>
+            <button type="button" class="free-button" id="point-tool-toggle">point</button>
+            <button type="button" class="free-button" id="point-delete">delete</button>
+            <button type="button" class="free-button" id="point-clear">clear</button>
+            <span class="free-small-status" id="point-tool-status">0 seeds</span>
+          </div>
+        </div>
+        <div id="ce-panel">
+          <div class="readout" id="ce-status">CE: not detected</div>
+          <div id="ce-controls">
+            <label for="ce-interval-select">
+              interval
+              <select id="ce-interval-select">
+                <option value="0">AB</option>
+                <option value="1">CD</option>
+              </select>
+            </label>
+            <label for="ce-direction-select">
+              direction
+              <select id="ce-direction-select">
+                <option value="ccw">counterclockwise</option>
+                <option value="cw">clockwise</option>
+              </select>
+            </label>
+            <button type="button" id="ce-start-reset">Reset start</button>
+          </div>
+          <div class="readout" id="ce-chain-status">CE chain inactive</div>
+        </div>
         <canvas id="canvas" width="600" height="600"></canvas>
         <div class="readout" id="gamma-values">
           γ = (0.000, 0.000, 0.000, 0.000, 0.000, 0.000)
@@ -71,40 +129,106 @@
         </div>
       </div>
       <div id="region-panel" class="panel">
-        <div class="panel-title">Map Graph</div>
-        <div id="mode-row">
-          <button type="button" class="mode-button is-active" data-mode="composition">
-            G = compose chain
-          </button>
-          <button type="button" class="mode-button" data-mode="single">g<sub>c</sub></button>
-          <button type="button" class="mode-button" data-mode="pair">
-            g<sub>c1</sub> &#8728; g<sub>c2</sub>
-          </button>
-        </div>
-        <canvas id="region-canvas" width="600" height="600"></canvas>
-        <details id="admissible-editor-panel">
-          <summary>Admissible Set Function</summary>
-          <div class="editor-note">
-            Assume clamped inputs with a &le; b. Return a boolean. <code>STRICT_EPS</code> is available.
+        <div id="graph-panel">
+          <div class="panel-title" id="region-title">Map Graph</div>
+          <div id="mode-row">
+            <button type="button" class="mode-button is-active" data-mode="composition">
+              G = compose chain
+            </button>
+            <button type="button" class="mode-button" data-mode="single">g<sub>c</sub></button>
+            <button type="button" class="mode-button" data-mode="pair">
+              g<sub>c1</sub> &#8728; g<sub>c2</sub>
+            </button>
           </div>
-          <textarea id="admissible-editor" spellcheck="false"></textarea>
-          <div id="admissible-editor-row">
-            <div id="admissible-status">Default ordered predicate active.</div>
-            <button type="button" id="admissible-reset">Reset</button>
-          </div>
-        </details>
-        <details id="controller-state-panel">
-          <summary>Controller State</summary>
-          <div class="editor-note">Copy JSON to save the current controllers, then paste and load to restore.</div>
-          <textarea id="controller-state" spellcheck="false"></textarea>
-          <div id="controller-state-row">
-            <div id="controller-state-status">Snapshot updates automatically.</div>
-            <div id="controller-state-actions">
-              <button type="button" id="controller-state-copy">Copy</button>
-              <button type="button" id="controller-state-load">Load</button>
+          <canvas id="region-canvas" width="600" height="600"></canvas>
+          <details id="admissible-editor-panel">
+            <summary>Admissible Set Function</summary>
+            <div class="editor-note">
+              Assume clamped inputs with a &le; b. Return a boolean. <code>STRICT_EPS</code> is available.
             </div>
+            <textarea id="admissible-editor" spellcheck="false"></textarea>
+            <div id="admissible-editor-row">
+              <div id="admissible-status">Default ordered predicate active.</div>
+              <button type="button" id="admissible-reset">Reset</button>
+            </div>
+          </details>
+          <details id="controller-state-panel">
+            <summary>Controller State</summary>
+            <div class="editor-note">Copy JSON to save the current controllers, then paste and load to restore.</div>
+            <textarea id="controller-state" spellcheck="false"></textarea>
+            <div id="controller-state-row">
+              <div id="controller-state-status">Snapshot updates automatically.</div>
+              <div id="controller-state-actions">
+                <button type="button" id="controller-state-copy">Copy</button>
+                <button type="button" id="controller-state-load">Load</button>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div id="free-panel" hidden>
+          <div id="free-status" class="readout">Free mode inactive</div>
+          <div id="free-controls"></div>
+          <details id="free-state-panel">
+            <summary>Free State</summary>
+            <div class="editor-note">Copy JSON to save free-mode triangles, constraints, and labels.</div>
+            <textarea id="free-state-json" spellcheck="false"></textarea>
+            <div id="free-state-row">
+              <div id="free-state-status">Free snapshot updates automatically.</div>
+              <div id="free-state-actions">
+                <button type="button" id="free-state-copy">Copy</button>
+                <button type="button" id="free-state-load">Load</button>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div id="ab-union-panel" hidden>
+          <div class="panel-title" id="ab-union-panel-title">ab union region</div>
+          <div id="ab-union-controls"></div>
+        </div>
+        <div id="core-graph-panel" hidden>
+          <div class="panel-title">Core f(a,b)</div>
+          <div class="readout" id="core-graph-status">loading core graph</div>
+          <div id="core-sample-row">
+            <label for="core-sample-rate-select">sample</label>
+            <select id="core-sample-rate-select">
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low" selected>low</option>
+            </select>
+            <label>
+              <input type="checkbox" id="core-dense-special-curve-toggle" />
+              dense near 6-point curve
+            </label>
+            <label>
+              <input type="checkbox" id="core-special-neighborhood-toggle" />
+              6-point neighborhood only
+            </label>
+            <label>
+              <input type="checkbox" id="core-strict-two-line-toggle" />
+              two-line AB superset
+            </label>
+            <label>
+              <input type="checkbox" id="core-relaxed-p-toggle" />
+              relaxed P circles
+            </label>
           </div>
-        </details>
+          <div id="core-point-controls"></div>
+          <canvas id="core-surface-canvas" width="600" height="360"></canvas>
+          <div id="core-slice-row">
+            <label for="core-slice-slider">
+              k = <span id="core-slice-value">0.000000</span>
+            </label>
+            <input
+              type="range"
+              id="core-slice-slider"
+              min="0"
+              max="1"
+              step="0.000001"
+              value="0"
+            />
+          </div>
+          <canvas id="core-heatmap-canvas" width="600" height="600"></canvas>
+        </div>
         <div id="slider-row" hidden>
           <label for="c-slider">c = <span id="c-value">0.50</span></label>
           <input type="range" id="c-slider" min="0" max="1" step="0.01" value="0.50" />

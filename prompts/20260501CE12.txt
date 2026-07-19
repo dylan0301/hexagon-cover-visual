@@ -1,0 +1,95 @@
+think about all cases the C-triangle can intersect with the perimeter of hexagon.
+We classify as Ce0 Ce1 Ce2 as written in 20260501generalExplain.md
+It may be differently written with the other files that were already here, so look at them and match
+tell me which parts are different
+
+In the current code, I want to experiment with also Ce1 Ce2 triangles.
+We only essentially dealt with Ce0 triangles because we only cared about gammas.
+However, the ultimate goal is to find every possible case where 7 triangles can cover the hexagon skeleton.
+So when I move the C-triangle and reach Ce1 Ce2 triangles, I need to also detect the intersection with the hexagon perimeter.
+For now, we only deal with Vd0 for V-triangles. Refer to 20260501generalExplain.md for definition of Vd0.
+It just means we keep dealing with the admissible set right now.
+For the Ce0 case, there was a natural way to maximally put the other 6 triangles around the hexagon perimeter.
+For the Ce1 case, the C-triangle intersects with an hexagon edge as an interval [a,b].
+Then the start point of the g chain is just a or b depending on the direction of the chain.
+Then we can similarly see if a cover is possible or not. we just think there is an offset to the g chain.
+For the Ce2 case, read 20260501oneIntervalLemmaIncomplete.md. 
+The conclusion is that for the maximal covering, only one of the two intervals made from intersection actually contributes to the skeleton covering.
+Let AB and CD be the two intervals created from the Ce2 and hexagon perimeter intersection.
+Then we can start the g-chain with two choices, AB or CD contributes to the skeleton covering. Other interval, we don't think about it in the covering.
+Then we can do the g-chain as we did in Ce1. Note that the direction of g-chain can be both clockwise and counterclockwise,
+so we have two options to choose again. 
+if we chose AB interval and counterclockwise, we will start the g-chain such that first triangle does not cover the AB interval.
+make select boxes for which interval, and which direction.
+Implement all of these. ask me questions.
+
+
+
+{
+  "version": 2,
+  "shapeMode": "triangle",
+  "graphMode": "composition",
+  "startValue": 0.25,
+  "singleParameter": 0.5,
+  "triangleState": {
+    "position": {
+      "x": 0.5110585150239468,
+      "y": -0.10205120380112209
+    },
+    "angle": 1.3801555969881303,
+    "controlPoint": {
+      "x": 0.5110585150239468,
+      "y": -0.10205120380112209
+    }
+  },
+  "manualLocalCs": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+  ],
+  "selectedHalfDiagonalIndices": [
+    1
+  ],
+  "admissibleSource": "const strict = Math.max(0, STRICT_EPS);\nconst sum = a + b;\nconst circle = a * a + a * b + b * b;\nif (circle > 1 - strict + EPS) {\n  return false;\n}\n\nconst transition = sum ** 4 - sum * sum + a * b;\nconst cell1 =\n  sum <= 1 - strict + EPS &&\n  transition <= -strict + EPS &&\n  c ** 4 - c * c + a * c - a * a <= -strict + EPS;\nconst cell2 =\n  sum <= 1 - strict + EPS &&\n  transition >= strict - EPS &&\n  (sum * sum - 1) * c * c + b * c - b * b <= -strict + EPS;\nconst cell3 =\n  sum >= 1 + strict - EPS &&\n  c <= 0.5 - strict + EPS &&\n  (a * a - 1) * c * c + (2 * a * b * b + b) * c + (b ** 4 - b * b) <= -strict + EPS;\n\nreturn cell1 || cell2 || cell3;",
+  "strictCheckEnabled": true,
+  "strictEps": 0.0000279,
+  "strictEpsUpperBound": 0.0001,
+  "showCoverOverlay": true,
+  "ceDirection": "ccw",
+  "ce2SelectedIntervalIndex": 1
+}
+
+For this state, V0 triangle starts from interval CD, and direction is counterclockwise.
+V0 triangle covers interval AB.
+However, V1 triangle does not start from the next point of V0 triangle. Is it a bug? or is it just admissible set thing? 
+calculate yourself and tell me
+
+
+I mean V1 triangle entierly also covers interval AB,
+and there is too much intersection between V1 triangle and V0 triangle.
+Is this because outer gamma 1 is too large?
+-this is true.
+
+I implemented Ce1 and Ce2 triangle to be able.
+But the map graph just stays the same as Ce0.
+I need to update the map graph to reflect the Ce1 Ce2 cases.
+ask me quesztions give me suggestions
+
+1. only the relevant interval from start to target. visualize how the mapping went
+2. yes
+3. only selected case.
+4. label chains.
+5. only describe six V-triangle propagation.
+6. shown faintly as context
+7. what is single and pair graph modes?
+fix the suggested one possible bug/UX issue
+
+roll back what you just changed. I think previous one is better. but only fix the bug/UX issue.
+
+when running Ce1 Ce2 mode, right now we fix the start point of g-chain.
+but just let the default start point of chain be that, and make it able to move the starting points.
+make a reset button to make the start point of chain to be the default point.
+ask me questions if needed

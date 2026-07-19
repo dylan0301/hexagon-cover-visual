@@ -1,0 +1,4 @@
+read counterexample_cover.py. this code turns the json into a figure of triangles.
+in the website, I want to make a mode when i toggle it, it actually visualizes the 6 triangles around the perimeter of hexagon,
+whether it covers or not the hexagon skeleton.
+ask me questions

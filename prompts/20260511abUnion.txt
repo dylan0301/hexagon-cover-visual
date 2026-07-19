@@ -1,0 +1,1096 @@
+# Hexagon Corner-Region Problem: Equality Versus Strict-Inequality Cases
+
+## 1. Problem
+
+Let $H$ be the regular hexagon of side length $1$ centered at the origin, with vertices
+
+\[
+V_i=\left(\cos\frac{i\pi}{3},\sin\frac{i\pi}{3}\right),
+\qquad i=0,\dots,5,
+\]
+
+with indices taken modulo $6$.
+
+Let $e_i$ be the edge from $V_i$ to $V_{i+1}$.  
+Choose a point $p_i$ on $e_i$ by
+
+\[
+p_i=V_i+b_i(V_{i+1}-V_i),
+\qquad 0\le b_i\le 1.
+\]
+
+Thus $b_i$ is the distance parameter from $V_i$ to $p_i$ along $e_i$.
+
+At vertex $V_i$, define
+
+\[
+a_i=1-b_{i-1}.
+\]
+
+This is the length parameter from $V_i$ to $p_{i-1}$ along the previous edge $e_{i-1}$.
+
+Therefore
+
+\[
+a_i+b_i=1-b_{i-1}+b_i.
+\]
+
+Hence
+
+\[
+a_i+b_i=1
+\quad\Longleftrightarrow\quad
+b_i=b_{i-1}.
+\]
+
+For each $i$, define $R_i$ to be the union of all closed unit equilateral triangles that contain
+
+\[
+V_i,\quad p_{i-1},\quad p_i,
+\]
+
+restricted to the $120^\circ$ cone of $H$ at $V_i$.
+
+Let
+
+\[
+R=\bigcup_{i=0}^5 R_i
+\]
+
+and define the remaining region
+
+\[
+U=H\setminus R.
+\]
+
+For an angle $\theta$, let $T(\theta)$ be the smallest equilateral triangle with outward normal directions
+
+\[
+n_k(\theta)=
+\left(
+\cos\left(\theta+\frac{2\pi k}{3}\right),
+\sin\left(\theta+\frac{2\pi k}{3}\right)
+\right),
+\qquad k=0,1,2,
+\]
+
+that contains $U$.
+
+Its side length is
+
+\[
+L(\theta)
+=
+\frac{2}{\sqrt3}
+\sum_{k=0}^2 h_k(\theta),
+\]
+
+where
+
+\[
+h_k(\theta)=\sup_{x\in U} n_k(\theta)\cdot x.
+\]
+
+The optimized side length is
+
+\[
+L_*=\inf_\theta L(\theta).
+\]
+
+The question is:
+
+> Can we find $p_0,\dots,p_5$ such that
+>
+> \[
+> L_*<1
+> \]
+>
+> and simultaneously
+>
+> \[
+> a_i+b_i\neq 1
+> \qquad\text{for every }i?
+> \]
+>
+> Equivalently, can we find
+>
+> \[
+> b_i\neq b_{i-1}
+> \qquad\text{for every }i
+> \]
+>
+> while still having $L_*<1$?
+
+---
+
+## 2. Known Positive Construction When Equality Is Allowed
+
+If
+
+\[
+b_0=b_1=\cdots=b_5=c,
+\]
+
+then
+
+\[
+a_i+b_i=1-b_{i-1}+b_i=1
+\]
+
+for every $i$.
+
+Numerically and geometrically, for small $c$, the remaining region is contained in the equilateral triangle
+
+\[
+n_0\cdot x\le c,
+\qquad
+n_1\cdot x\le c,
+\qquad
+n_2\cdot x\le c,
+\]
+
+with
+
+\[
+n_0=(1,0),
+\qquad
+n_1=\left(-\frac12,\frac{\sqrt3}{2}\right),
+\qquad
+n_2=\left(-\frac12,-\frac{\sqrt3}{2}\right).
+\]
+
+This triangle has side length
+
+\[
+2\sqrt3\,c.
+\]
+
+Therefore any
+
+\[
+0<c<\frac{1}{2\sqrt3}
+\]
+
+gives the upper bound
+
+\[
+L_*\le 2\sqrt3\,c<1.
+\]
+
+For example, with
+
+\[
+c=\frac14,
+\]
+
+we get
+
+\[
+L_*\le \frac{\sqrt3}{2}\approx 0.866025<1.
+\]
+
+The corresponding points are
+
+\[
+p_i=\frac34V_i+\frac14V_{i+1}.
+\]
+
+In coordinates:
+
+\[
+\begin{aligned}
+p_0&=\left(\frac78,\frac{\sqrt3}{8}\right),\\
+p_1&=\left(\frac14,\frac{\sqrt3}{2}\right),\\
+p_2&=\left(-\frac58,\frac{3\sqrt3}{8}\right),\\
+p_3&=\left(-\frac78,-\frac{\sqrt3}{8}\right),\\
+p_4&=\left(-\frac14,-\frac{\sqrt3}{2}\right),\\
+p_5&=\left(\frac58,-\frac{3\sqrt3}{8}\right).
+\end{aligned}
+\]
+
+This construction works, but it uses the equality case
+
+\[
+a_i+b_i=1.
+\]
+
+---
+
+## 3. Current Conclusion for the Strict-Inequality Question
+
+The numerical evidence strongly suggests that there is no configuration with
+
+\[
+L_*<1
+\]
+
+and
+
+\[
+a_i+b_i\neq 1
+\qquad\text{for every }i.
+\]
+
+Equivalently, the evidence suggests the implication
+
+\[
+L_*<1
+\quad\Longrightarrow\quad
+\exists i\text{ such that }b_i=b_{i-1}.
+\]
+
+In terms of $a_i,b_i$,
+
+\[
+L_*<1
+\quad\Longrightarrow\quad
+\exists i\text{ such that }a_i+b_i=1.
+\]
+
+This is not yet a complete proof. The current status is:
+
+\[
+\boxed{
+\text{No strict-inequality counterexample was found.}
+}
+\]
+
+and the likely theorem is
+
+\[
+\boxed{
+\text{All }L_*<1\text{ cases require at least one equality }a_i+b_i=1.
+}
+\]
+
+---
+
+## 4. Structural Reason for the Obstruction
+
+Because the indices are cyclic, if
+
+\[
+b_i\neq b_{i-1}
+\qquad\text{for all }i,
+\]
+
+then the cyclic sequence
+
+\[
+b_0,b_1,\dots,b_5
+\]
+
+has at least one strict local maximum and at least one strict local minimum.
+
+At a strict local extremum, the two neighboring corner regions do not match tangentially. Numerically, this creates a very thin uncovered slit in $U$.
+
+The key observed behavior is:
+
+- these slits can be extremely thin;
+- coarse sampling may miss their limiting endpoints;
+- when the sampling is refined near the slit, the best enclosing side length approaches $1$ from below or from above;
+- no refined test found a stable margin such as $L_*<0.98$.
+
+Thus many apparent examples with $L_*<1$ are sampling artifacts.
+
+A typical near-miss is
+
+\[
+(b_0,b_1,b_2,b_3,b_4,b_5)
+=
+(0.01,0.008,0.006,0.004,0.002,0).
+\]
+
+Then
+
+\[
+(a_i+b_i)_{i=0}^5
+=
+(1.01,0.998,0.998,0.998,0.998,0.998),
+\]
+
+so all six values are different from $1$.
+
+Coarse grids may report
+
+\[
+L_*\approx 0.99,
+\]
+
+but refined grids converge back to
+
+\[
+L_*=1.
+\]
+
+This is why the strict-inequality problem is delicate: the obstruction is nearly invisible unless the uncovered slits are resolved.
+
+---
+
+## 5. Local Membership Predicate for $R_i$
+
+To test the geometry, use local coordinates at each vertex $V_i$.
+
+Let
+
+\[
+O=V_i,
+\qquad
+A=p_{i-1},
+\qquad
+B=p_i.
+\]
+
+The two cone directions from $V_i$ are toward $V_{i-1}$ and $V_{i+1}$.
+
+Normalize the local coordinates so that
+
+\[
+A=(a,0),
+\qquad
+B=(0,b),
+\]
+
+where
+
+\[
+a=a_i=1-b_{i-1},
+\qquad
+b=b_i.
+\]
+
+A point $X$ in the cone has local coordinates
+
+\[
+X=(u,v),
+\qquad u,v\ge 0.
+\]
+
+The metric in these coordinates is
+
+\[
+\|(x,y)\|^2=x^2+y^2-xy.
+\]
+
+The local region $R(a,b)$ consists of the points $X=(u,v)$ such that there exists a closed unit equilateral triangle containing
+
+\[
+(0,0),\quad (a,0),\quad (0,b),\quad (u,v).
+\]
+
+The membership predicate used in the numerical test is:
+
+First, if
+
+\[
+a^2+ab+b^2>1,
+\]
+
+then $R(a,b)$ is empty.
+
+Otherwise, $X\in R(a,b)$ if at least one of the following conditions holds.
+
+### 5.1 Convex Hull Part
+
+\[
+bu+av\le ab.
+\]
+
+### 5.2 Fixed-Side Parts
+
+\[
+\max(a+b,\ a-u+v,\ u+b,\ v)\le 1,
+\]
+
+or
+
+\[
+\max(a+b,\ b-v+u,\ v+a,\ u)\le 1.
+\]
+
+### 5.3 Moving Side Through $A$
+
+Define
+
+\[
+D_A^2=(u-a)^2+v^2-(u-a)v,
+\]
+
+\[
+P_A=a(a-u+v)+bv,
+\]
+
+\[
+Q_A=a(a-u),
+\]
+
+\[
+S_A=a(a+b-u)+b(v-u).
+\]
+
+If $D_A>0$, define
+
+\[
+\ell_A=
+\max\left(D_A,\frac{P_A}{D_A}\right)
+-
+\min\left(0,\frac{Q_A}{D_A},\frac{S_A}{D_A}\right).
+\]
+
+Then the moving-side-through-$A$ condition is
+
+\[
+\ell_A\le 1.
+\]
+
+### 5.4 Moving Side Through $B$
+
+Define
+
+\[
+D_B^2=u^2+(v-b)^2-u(v-b),
+\]
+
+\[
+P_B=b(b-v+u)+au,
+\]
+
+\[
+Q_B=b(b-v),
+\]
+
+\[
+S_B=b(a+b-v)+a(u-v).
+\]
+
+If $D_B>0$, define
+
+\[
+\ell_B=
+\max\left(D_B,\frac{P_B}{D_B}\right)
+-
+\min\left(0,\frac{Q_B}{D_B},\frac{S_B}{D_B}\right).
+\]
+
+Then the moving-side-through-$B$ condition is
+
+\[
+\ell_B\le 1.
+\]
+
+---
+
+## 6. Numerical Test
+
+The numerical test should do the following.
+
+1. Sample many choices of
+
+\[
+b=(b_0,\dots,b_5)\in[0,1]^6.
+\]
+
+2. Reject or mark configurations where some
+
+\[
+|b_i-b_{i-1}|
+\]
+
+is too small, depending on the strictness tolerance.
+
+3. For each sampled $b$, compute the remaining region
+
+\[
+U=H\setminus\bigcup_i R_i
+\]
+
+on a grid.
+
+4. For each $\theta$, compute support values
+
+\[
+h_k(\theta)=\max_{x\in U} n_k(\theta)\cdot x.
+\]
+
+5. Compute
+
+\[
+L(\theta)=\frac{2}{\sqrt3}\sum_{k=0}^2h_k(\theta).
+\]
+
+6. Minimize over $\theta\in[0,2\pi/3)$.
+
+7. If a candidate with $L_*<1$ appears, refine adaptively near the uncovered set boundary and especially near thin slits.
+
+A valid counterexample should satisfy a robust margin, for example
+
+\[
+L_*<0.98
+\]
+
+after adaptive refinement.
+
+A result like
+
+\[
+L_*\approx 0.999
+\]
+
+should not be trusted, because the thin slits are easy to miss.
+
+---
+
+## 7. Python Numerical Test Code
+
+```python
+import math
+import numpy as np
+
+SQRT3 = math.sqrt(3)
+N = 6
+
+V = np.array([
+    [math.cos(i * math.pi / 3), math.sin(i * math.pi / 3)]
+    for i in range(6)
+])
+
+def cross_const_arr(a, B):
+    return a[0] * B[:, 1] - a[1] * B[:, 0]
+
+def cross_arr_const(A, b):
+    return A[:, 0] * b[1] - A[:, 1] * b[0]
+
+def make_grid(res):
+    xs = np.linspace(-1 + 1 / res, 1 - 1 / res, res)
+    ys = np.linspace(-SQRT3 / 2 + SQRT3 / (2 * res),
+                     SQRT3 / 2 - SQRT3 / (2 * res),
+                     res)
+
+    X, Y = np.meshgrid(xs, ys)
+    P = np.column_stack([X.ravel(), Y.ravel()])
+
+    inside = np.ones(P.shape[0], dtype=bool)
+
+    for i in range(6):
+        edge = V[(i + 1) % 6] - V[i]
+        inside &= cross_const_arr(edge, P - V[i]) >= -1e-12
+
+    return P[inside]
+
+def precompute_local_coords(P):
+    U = []
+    W = []
+
+    for i in range(6):
+        O = V[i]
+        eA = V[(i - 1) % 6] - O
+        eB = V[(i + 1) % 6] - O
+        r = P - O
+
+        det = eA[0] * eB[1] - eA[1] * eB[0]
+
+        u = cross_arr_const(r, eB) / det
+        v = cross_const_arr(eA, r) / det
+
+        U.append(u)
+        W.append(v)
+
+    return np.array(U), np.array(W)
+
+def region_contains_local(a, b, u, v):
+    eps = 1e-9
+
+    valid = (u >= -eps) & (v >= -eps)
+
+    if a * a + a * b + b * b > 1 + 1e-8:
+        return np.zeros_like(u, dtype=bool)
+
+    if a > eps and b > eps:
+        in_hull = b * u + a * v <= a * b + 1e-9
+    elif a <= eps and b <= eps:
+        in_hull = u * u + v * v - u * v <= 1e-10
+    elif a <= eps:
+        in_hull = (np.abs(u) <= 1e-8) & (v >= -eps) & (v <= b + 1e-8)
+    else:
+        in_hull = (np.abs(v) <= 1e-8) & (u >= -eps) & (u <= a + 1e-8)
+
+    out = valid & in_hull
+
+    fixed_1 = np.maximum.reduce([
+        np.full_like(u, a + b),
+        a - u + v,
+        u + b,
+        v
+    ]) <= 1 + 1e-9
+
+    fixed_2 = np.maximum.reduce([
+        np.full_like(u, a + b),
+        b - v + u,
+        v + a,
+        u
+    ]) <= 1 + 1e-9
+
+    out |= valid & (fixed_1 | fixed_2)
+
+    DA2 = (u - a) ** 2 + v ** 2 - (u - a) * v
+    okA = DA2 > eps * eps
+
+    DA = np.ones_like(u)
+    DA[okA] = np.sqrt(DA2[okA])
+
+    PA = a * (a - u + v) + b * v
+    QA = a * (a - u)
+    SA = a * (a + b - u) + b * (v - u)
+
+    ellA = (
+        np.maximum(DA, PA / DA)
+        -
+        np.minimum.reduce([np.zeros_like(u), QA / DA, SA / DA])
+    )
+
+    out |= valid & okA & (ellA <= 1 + 1e-9)
+
+    DB2 = u ** 2 + (v - b) ** 2 - u * (v - b)
+    okB = DB2 > eps * eps
+
+    DB = np.ones_like(u)
+    DB[okB] = np.sqrt(DB2[okB])
+
+    PB = b * (b - v + u) + a * u
+    QB = b * (b - v)
+    SB = b * (a + b - v) + a * (u - v)
+
+    ellB = (
+        np.maximum(DB, PB / DB)
+        -
+        np.minimum.reduce([np.zeros_like(u), QB / DB, SB / DB])
+    )
+
+    out |= valid & okB & (ellB <= 1 + 1e-9)
+
+    return out
+
+def remaining_points(b, P, U, W):
+    covered = np.zeros(P.shape[0], dtype=bool)
+
+    for i in range(6):
+        a_i = 1 - b[(i - 1) % 6]
+        b_i = b[i]
+        covered |= region_contains_local(a_i, b_i, U[i], W[i])
+
+    return P[~covered]
+
+def side_length_for_theta(points, theta):
+    if len(points) == 0:
+        return 0.0
+
+    total = 0.0
+
+    for k in range(3):
+        n = np.array([
+            math.cos(theta + 2 * math.pi * k / 3),
+            math.sin(theta + 2 * math.pi * k / 3)
+        ])
+
+        total += np.max(points @ n)
+
+    return 2 * total / SQRT3
+
+def optimize_theta(points, samples=720):
+    if len(points) == 0:
+        return 0.0, 0.0
+
+    best_L = float("inf")
+    best_theta = 0.0
+
+    for theta in np.linspace(0, 2 * math.pi / 3, samples, endpoint=False):
+        L = side_length_for_theta(points, theta)
+
+        if L < best_L:
+            best_L = L
+            best_theta = theta
+
+    return best_L, best_theta
+
+def test_configuration(b, res=300):
+    b = np.array(b, dtype=float)
+
+    P = make_grid(res)
+    U, W = precompute_local_coords(P)
+    rem = remaining_points(b, P, U, W)
+
+    L, theta = optimize_theta(rem)
+
+    sums = np.array([
+        1 - b[(i - 1) % 6] + b[i]
+        for i in range(6)
+    ])
+
+    return {
+        "b": b,
+        "a_plus_b": sums,
+        "remaining_sample_count": len(rem),
+        "L": L,
+        "theta_radians": theta,
+        "theta_degrees": theta * 180 / math.pi,
+    }
+
+# Equality construction.
+print(test_configuration([0.25] * 6, res=300))
+
+# Near-miss strict-inequality candidate.
+print(test_configuration([0.01, 0.008, 0.006, 0.004, 0.002, 0.0], res=300))
+
+# Random search.
+rng = np.random.default_rng(0)
+
+best = None
+
+for _ in range(1000):
+    b = rng.uniform(0, 1, 6)
+
+    # Enforce a crude separation from equality.
+    if np.min(np.abs(b - np.roll(b, 1))) < 1e-3:
+        continue
+
+    result = test_configuration(b, res=100)
+
+    if best is None or result["L"] < best["L"]:
+        best = result
+
+print("best random result:")
+print(best)
+```
+
+---
+
+## 8. What Would Count as a Real Counterexample?
+
+A convincing counterexample must provide explicit values
+
+\[
+b_0,\dots,b_5
+\]
+
+such that
+
+\[
+b_i\neq b_{i-1}
+\qquad\text{for every }i,
+\]
+
+and a value of $\theta$ such that
+
+\[
+L(\theta)<1.
+\]
+
+Because of numerical slit artifacts, it should satisfy a clear margin, preferably
+
+\[
+L(\theta)<0.98.
+\]
+
+It should also remain below $1$ after:
+
+1. increasing grid resolution;
+2. adaptive refinement near uncovered slits;
+3. testing support directions near the reported optimal $\theta$;
+4. checking the closure of the remaining region, not only sampled interior points.
+
+No such counterexample was found.
+
+---
+
+## 9. What to Build in HTML
+
+The HTML app should be designed to expose exactly this obstruction.
+
+### 9.1 Geometry Display
+
+Draw the regular hexagon $H$ with vertices
+
+\[
+V_i=\left(\cos\frac{i\pi}{3},\sin\frac{i\pi}{3}\right).
+\]
+
+On each edge $e_i$, draw a draggable point
+
+\[
+p_i=V_i+b_i(V_{i+1}-V_i).
+\]
+
+Display the six values
+
+\[
+b_i
+\]
+
+and
+
+\[
+a_i=1-b_{i-1}.
+\]
+
+Also display
+
+\[
+a_i+b_i=1-b_{i-1}+b_i.
+\]
+
+Highlight whether
+
+\[
+a_i+b_i=1
+\]
+
+or equivalently
+
+\[
+b_i=b_{i-1}.
+\]
+
+### 9.2 Region Rendering
+
+For each vertex $V_i$, render the region $R_i$ using the local membership predicate above.
+
+The regions should be drawn in one pastel color with no internal boundaries by default, so the user sees only
+
+\[
+\bigcup_i R_i.
+\]
+
+When the user clicks $V_i$, toggle the boundary of $R_i$.
+
+When the user clicks $p_i$, toggle the boundaries of the two relevant regions:
+
+\[
+R_i
+\quad\text{and}\quad
+R_{i+1}.
+\]
+
+When the user clicks outside all vertices and points, clear all toggled boundaries.
+
+### 9.3 Remaining Region
+
+Render the remaining region
+
+\[
+U=H\setminus \bigcup_i R_i
+\]
+
+in a contrasting color or hatch.
+
+Important: also render very thin uncovered slits. Do not rely only on coarse rasterization.
+
+The app should support:
+
+- coarse display mode for speed;
+- high-resolution verification mode;
+- adaptive refinement near uncovered/covered boundaries.
+
+### 9.4 Equilateral Triangle Slider
+
+Add a slider for
+
+\[
+\theta\in[0,2\pi/3).
+\]
+
+For the current $\theta$, compute
+
+\[
+n_k(\theta)=
+\left(
+\cos\left(\theta+\frac{2\pi k}{3}\right),
+\sin\left(\theta+\frac{2\pi k}{3}\right)
+\right).
+\]
+
+For sampled points $x\in U$, compute
+
+\[
+h_k(\theta)=\max_{x\in U} n_k(\theta)\cdot x.
+\]
+
+Draw the enclosing triangle
+
+\[
+n_k(\theta)\cdot x\le h_k(\theta),
+\qquad k=0,1,2.
+\]
+
+Display
+
+\[
+L(\theta)=\frac{2}{\sqrt3}\sum_{k=0}^2 h_k(\theta).
+\]
+
+Also add an "optimize $\theta$" button that samples $\theta$ and reports the best found value
+
+\[
+L_*.
+\]
+
+### 9.5 Equality Detector
+
+Display a table:
+
+| $i$ | $b_{i-1}$ | $b_i$ | $a_i+b_i$ | equality? |
+|---:|---:|---:|---:|:---|
+| $0$ | $b_5$ | $b_0$ | $1-b_5+b_0$ | yes/no |
+| $1$ | $b_0$ | $b_1$ | $1-b_0+b_1$ | yes/no |
+| $\cdots$ | | | | |
+
+If
+
+\[
+\min_i |b_i-b_{i-1}|
+\]
+
+is small, show a warning:
+
+> This is close to the equality case. Apparent $L<1$ may be a near-degenerate equality artifact.
+
+### 9.6 Counterexample Search Mode
+
+Add a search panel that randomly or heuristically searches for strict-inequality candidates.
+
+For each candidate, report:
+
+\[
+b=(b_0,\dots,b_5),
+\]
+
+\[
+\min_i |b_i-b_{i-1}|,
+\]
+
+\[
+L_*,
+\]
+
+and the optimizer's best $\theta$.
+
+A candidate should be marked "interesting" only if
+
+\[
+L_*<0.98
+\]
+
+and
+
+\[
+\min_i |b_i-b_{i-1}|>10^{-3}.
+\]
+
+If
+
+\[
+0.98\le L_*<1,
+\]
+
+mark it as "needs refinement."
+
+If
+
+\[
+L_*\ge 1,
+\]
+
+mark it as "not a counterexample."
+
+### 9.7 Recommended Presets
+
+Include these presets:
+
+#### Equality Success Preset
+
+\[
+b=(0.25,0.25,0.25,0.25,0.25,0.25).
+\]
+
+Expected behavior:
+
+\[
+a_i+b_i=1
+\]
+
+for all $i$, and
+
+\[
+L_*<1.
+\]
+
+#### Near-Miss Strict Preset
+
+\[
+b=(0.01,0.008,0.006,0.004,0.002,0).
+\]
+
+Expected behavior:
+
+\[
+a_i+b_i\neq 1
+\]
+
+for all $i$, but refined computation should converge to
+
+\[
+L_*\approx 1.
+\]
+
+#### Random Strict Preset
+
+Generate random $b_i$ with
+
+\[
+|b_i-b_{i-1}|>10^{-3}.
+\]
+
+Expected behavior:
+
+Most examples should satisfy
+
+\[
+L_*\ge 1.
+\]
+
+---
+
+## 10. Current Working Conjecture
+
+The current conjecture is:
+
+\[
+\boxed{
+L_*<1
+\quad\Longleftrightarrow\quad
+\text{at least one equality }a_i+b_i=1\text{ occurs.}
+}
+\]
+
+Equivalently,
+
+\[
+\boxed{
+L_*<1
+\quad\Longleftrightarrow\quad
+\exists i\text{ such that }b_i=b_{i-1}.
+}
+\]
+
+The forward implication is the hard part:
+
+\[
+L_*<1
+\quad\Longrightarrow\quad
+\exists i,\ b_i=b_{i-1}.
+\]
+
+The numerical work supports this implication, but a complete proof still needs to formalize the uncovered-slit obstruction caused by strict local extrema of the cyclic sequence
+
+\[
+b_0,\dots,b_5.
+\]

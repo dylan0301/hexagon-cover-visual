@@ -1,0 +1,23 @@
+  Consider this set: you XOR the six circles, each centered at V_i, radius 1, and then intersect the whole thing with the hexagon.
+
+  Call each 'leaf' with vertices O, V_i, and V_{i+1} as L_i.
+
+  Each L_i only intersects with T_i and T_{i+1}. So we have good locality condition.
+
+  Question: Can this set be covered by seven triangles, like we did?
+
+  we will call this set lotus. note that it contains the hexagon perimeter.
+  I want to make a lotus mode. where we have to cover the lotus inside the free mode.
+  when we select it, show the lotus.
+  every feature in free mode should work for lotus except for Vd0 mode. 
+  ask me questions, especially how the modes should work.
+  also update things about lotus in the math.md
+
+  lotus is not a 2d object, it is 1d. tell me what you define lotus as
+   then keep asking me questions. but why did you mention about sampling? I thought you were talking about 2d regions
+ 
+ i think detecting local coverage seems wrong currently. think yourself which triangle can cover which arc, and tell me
+
+ i think we should change the definition of L_i. Define L_i to be the 2 arcs from O to V_i.
+ each triangle can intersect at most 4 arcs, think about that.
+ edit the codes ask me questions

@@ -1,0 +1,84 @@
+## Ce1 + At least one Vd1/Vd2/T3-like
+
+I want to find the maximal set of Ce1 triangles, Vd1 triangles, Vd2 triangles, T3 like triangles over half skeleotn S_{1/2}.
+
+before giving, first ask me questions
+
+1. act as a mathematician and output symbolic algebraic derivations.
+2. Use Cartesian coordinates with $C = (0,0)$ and $V_0 = (1, 0)$ with explicit line equations.
+3. Since we are handling with $S_{1/2}$, if we fix a type of a triangle and which M_i it contains, then we are only left with (a,b). we don't care about c because we deal with half skeleton. I want to find a Pareto front of admissible (a,b) for that fixed type.
+4. hardcode this assumption Assume $T_C$ overlaps exactly edge $e_{0,1}$ and strictly covers $M_0$
+
+For $T_C$, we want to find maximal $T_C$, which means we are not maximizing length along the edge $e_{0,1}$. Since $T_C$ would intersect with $e_{0,1}$ as an interval, we want maximal interval itself.
+
+for V-triangles, a triangle may cover zero or one or two or three $M_i$'s, so you have to think all cases
+
+We only consider maximal triangles over $S_{1/2}$
+
+Then the realizable exact midpoint subsets are:
+
+Vd0 (o=1,n=0): emptyset.
+
+Vd0 (o=2,n=0): {M0}
+
+Vd1 (o=1,n=1): emptyset, {M0}, {M1}, {M5}, {M0,M1}, {M0,M5}.
+
+Vd2 (o=1,n=2): {M0}, {M0,M1}, {M0,M5}, {M0,M1,M5}.
+
+T3-like (o=2,n=1): {M1}, {M5}.
+
+No other midpoint subset is geometrically realizable.
+
+I want to also make numerical functions. the (a,b) curve. a is input and b is output 
+
+for every combinotiral case
+
+to make this, sample many triangles that satisfies the given constraints, and take the pareto front.
+
+
+however, Vd0 front is very simple. if it contains M_i, then it is just a+b=1, and if it doesn't, then it is just a^2+ab+b^2=1.
+think yourself to see why this is true
+
+make a directory named proof and work in there
+
+
+-after codex
+
+your derivations are trash. also interface is trash.
+for the interface, don't do sampling yourself.
+I will do the sampling. make a sampling tool next to the marking tools.
+when sampling mode, every triangle besides from C triangle and V0 triangle are hidden. this is forced.
+Then when I move the triangles, the (a,b) for V0 triangle is sampled by the actual case this V0 triangle is.
+Same for the C triangle. did you understand what i'm saying?
+also delete the derivations because it is trash.
+
+also record Ce2 triangles that contain M0.
+Then it will meet at two intervals with edge 01 and edge 50.
+how to visualize this?
+
+
+for sampling visualizing, don't check if V0 triangle covers V0
+it always does but the program says it doesn't contain V0
+same for C triangle it does contain C, in fact we can only move such that it contains C.
+also, sample each case with different colors.
+For Ce1 case, make a interval graphs with two axis where each axis is end of interval.
+For Ce2 case, make two graphs with two axis, where each graph stands for intervals.
+In order to match the intervals, color code with hue left to right in the first graph, and in the second graph, color code with matching interval's color from the first graph.
+
+
+
+
+-at night prompt generation
+i want to figure out the maxial triangles over half skeleton S_{1/2} with help from llm.
+write a rigorous mathematical prmopt of self contained guide for llm, 
+that doesn't know any context about hexagon covering.
+be as rigorous as you can to give all context you have. include all math related things in the prompt.
+in the proof directory, make md file for each target. 
+one target is one form something like "Vd1 (o=1,n=1) {M_1}"
+ask me questions.
+
+
+
+-at night sampling fix
+show the sampling graphs only when sampling mode enabled
+

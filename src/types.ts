@@ -9,7 +9,17 @@ export interface TriangleState {
   controlPoint: Point;
 }
 
-export type ShapeMode = 'triangle' | 'local-c' | 'circle';
+export type ShapeMode =
+  | 'triangle'
+  | 'local-c'
+  | 'circle'
+  | 'free'
+  | 'ab-union'
+  | 'ab-hull-debug'
+  | 'max-area'
+  | 'area-conj'
+  | 'core-case'
+  | 'core-graph';
 
 export type InteractionState =
   | { kind: 'idle' }
@@ -18,4 +28,5 @@ export type InteractionState =
   | { kind: 'dragging-triangle'; startMouse: Point; startPos: Point; startControl: Point }
   | { kind: 'rotating-triangle'; startMouse: Point; startAngle: number; startPos: Point }
   | { kind: 'dragging-control-point'; startMouse: Point; startControl: Point }
+  | { kind: 'dragging-point-seed'; seedId: string }
   | { kind: 'dragging-start-value' };

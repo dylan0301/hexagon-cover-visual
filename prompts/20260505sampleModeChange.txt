@@ -1,0 +1,19 @@
+in the sample mode, for each type, don't build the pareto front lines.
+instead, only plot the pareto front points and delete the non front points.
+also i want a label of which color is which type next to the graph.
+ask me questions
+
+when sample mode, treat triangles as closed triangles.
+
+how are you measuring maximal Ce1 and Ce2 intervals?
+I need actual interval maximality, not pareto front on the endpoints. they are different
+
+nope that's not the problem. 
+I am moving the triangle and it hits many maximal intervals for Ce1, even the status shows it is Ce1 accepted.
+however, in the graph, I only see one dot plotted at the top left
+
+
+make the color for V-triangles more distinguishible. more hue.
+also, make label for axis, since all axis are 0 to 1, make 0 0.1 0.2 ... 0.9 1
+
+make an on off checkbox to show only pareto points vs all points. default is only pareto

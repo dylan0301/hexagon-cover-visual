@@ -1,0 +1,7 @@
+we have the area conjecture
+calculate the max area function f(a,b) under the constraint that this triangle is T3 like
+in the max area and area conj tools, add a checkbox for T3 like
+everything else works the same
+ask me questions
+
+don't constraint on containing M1 or M5. only need to intersect with the half diagonals OV1 and OV5. thats the definition for T3 like

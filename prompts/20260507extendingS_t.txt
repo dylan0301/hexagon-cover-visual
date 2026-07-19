@@ -1,0 +1,4 @@
+In S_t mode, we currently add one point on each half diagonal.
+make it availbe to add as many points as we want on each half diagonal
+same postiions on each half diagonal. we can similarly drag each ponits.
+ask me questiosn

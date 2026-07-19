@@ -1,0 +1,82 @@
+Q is a convex quadrilateral, and f(Q) is the smallest equilateral triangle that contains Q.
+then either
+one vertex of Q is one vertex of f(Q), and two of the three other vertices of Q lies on edges of f(Q)
+all vertices of Q lies on edges of f(Q)
+two vertices of Q are two vertices of f(Q)
+
+이거 증명
+support function: h_A(x)= sup{<x,a> : a in A} 
+f(Q)의 side length를 s 라고 할때
+n0, n1, n2를 각각 0도, 120도, 240도 방향 unit vector라고 하고 
+R_{theta} 가 theta만큼 회전시키는 linear map이라고 할때
+s = 2/sqrt3 * (h_Q(R_theta(n0)) + h_Q(R_theta(n1)) + h_Q(R_theta(n2))
+Jeewon — 오후 5:08
+이런 경우가 불가능함을 보여볼게요
+아니다 그냥 n0, n1, n2를 애초에 theta, theta+120도, theta+240도 unit vector로 쓸게요
+s = 2/sqrt3 * (h_Q(n0) + h_Q(n1) + h_Q(n2))
+Jeewon — 오후 5:12
+그럼 이런 경우에는
+n_i vector에 대한 support function을 realize해주는 vector가
+argmax{<n_i,a> : a in A}
+각각 n_i마다 정확히 하나 있을거에요. Q의 꼭짓점으로
+q0, q1, q2라고 할게요
+h_Q(n_i) = <q_i, n_i>
+이제 아주 쪼금 rotation을 시켜서 minimum triangle의 변 길이를 줄일 수 있음을 보일건데
+Jeewon — 오후 5:20
+일단 적당히 작은 eps이 존재해서 |theta| < eps 만큼 회전시켜도 여전히 h_Q(R{theta}(n_i)) = <q_i,R{theta}(n_i)>가 성립하고 Q의 나머지 한 점이 삼각형의 interior에 있음을 보여볼거에요 
+q_i 를 지나고 n_i를 normal vector로 갖는 직선을 삼각형 안쪽 방향의 n_i 방향 (n_i 또는 -n_i) 로 약간 이동시키면
+q_i와 Q의 나머지 꼭짓점들을 separate하는 hyperplane이 되는데
+아니다 이렇게 하지말고
+h_Q(n_i) = <x, n_i>의 해가 q_i 밖에 지금 없는 상태인건데
+WLOG n_0라고 하면
+<q_i,n_0> < <q_0, n_0> for i = 1,2,3
+Jeewon — 오후 5:28
+p != q_0에 대해서 <q_0-p, n_0> > 0이 되는 셈인데 
+<q_0 - p, R{theta}(n_0)> = <q_0 - p, n_0> + <q_0 - p, R{theta}(n_0) - n_0>
+theta -> 0으로 보내면 오른쪽 term은 vanish하는데
+<q_0 - p, n_0>  > 0이니까 적당히 eps이 존재해요
+Jeewon — 오후 5:30
+그럼 이건 증명되었고
+h_Q(R{theta}(n_i)) = <q_i,R{theta}(n_i)> 에서
+R{theta}(n_i) = cos(theta) n_i + sin(theta) R{90deg}(n_i)
+로 쓸수있는데
+s = 2/sqrt3 * (h_Q(n0) + h_Q(n1) + h_Q(n2))
+다시 이 식을 보면
+g(theta) = h_Q(R{theta}(n0)) + h_Q(R{theta}(n1)) + h_Q(R{theta}(n2)) 라고 할때
+전부다 linear 하니까
+g(theta) = cos(theta) g(0) + sin(theta) g(90deg)
+g(90deg) > 0 이면 theta < 0 일때 g(theta) < g(0) 
+g(90deg) < 0이면 theta > 0 일때 g(theta) < g(0)
+Jeewon — 오후 5:37
+그래서 locally rotate해서 더 작게 만들수있어서 이런 경우가 안나와요
+그다음 다시 원래 문제로 돌아가면
+f(Q)의 한 변에 아무 꼭짓점도 없으면 자명하게 변길이 줄일 수 있어서
+f(Q)의 각 변마다 모두다 Q의 꼭짓점이 있긴 해야되고요
+그래서 그냥 케이스 분류하면 저거밖에 안나와요
+
+
+만약에 저거 맞으면 a_1+b_1 = 1 가정 하에서 X_0랑 X_1 움직일때 X_0, X_1의 position 고려해야하는 개수가 유한개가 될거같아요
+그러면 그냥 X_3, X_4만 움직이는 2차원 문제로 reduce가 될거같아요
+this is about conj0521 mode.
+
+시도해볼만한 케이스 분류는
+각 X_i가 육각형 edge위에 [0.4, 0.6] 사이에 전부다 있는 경우
+아닌 경우
+뭐 이런식으로 나눠보면 어떨까요
+전자 경우는 그냥 hexagon skeleton만 갖고도 쉽게 커버 안된다 증명될거같아요
+후자 경우는 부채꼴 전략 쓰고요
+
+include self contained all mathematical definitions and context about conj0521 and this thing and create a md file that is exportable
+to feed another llm to prove our hexagon covering conjecture. 
+think and talk in english
+ask me questions
+
+
+since there is a example for this,
+we may try 각 X_i가 육각형 edge위에 [0.4, 0.6] 사이에 전부다 있는 경우 just do admissible set for each V_i and it cannot cover the hexagon skeleton,
+since the coutnerexmaple only seems to exist when X_i's are near the midpoint of each edge.
+
+or also try a strategy where we don't assume a_1+b_1 = 1, and we choose total 5 points 
+additional point is the point on CV_1 the max gamma point for V_1.
+try both strategies.
+add a another md file for this following prompt for llm

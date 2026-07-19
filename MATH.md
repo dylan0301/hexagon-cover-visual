@@ -272,7 +272,74 @@ So the global covering problem is reduced to a family of explicit one-dimensiona
   \]
   where in the proof one only uses the bounds $c_i \le 1-\gamma_i$.
 
-## 11. What remains to prove mathematically
+## 11. `ab union` region explorer
+
+The `ab union` mode studies a related corner-region problem. For each edge
+\[
+e_i=[V_i,V_{i+1}]
+\]
+choose one or two ordered boundary dots
+\[
+X_i=V_i+\ell_i(V_{i+1}-V_i),\qquad
+Y_i=V_i+r_i(V_{i+1}-V_i),
+\qquad 0\le \ell_i\le r_i\le 1.
+\]
+A one-dot edge is the special case \(\ell_i=r_i\).  The outgoing value at
+`V_i` is
+\[
+b_i=\ell_i,
+\]
+and the incoming value at `V_{i+1}` is
+\[
+a_{i+1}=1-r_i.
+\]
+Thus at vertex `V_i`,
+\[
+a_i=1-r_{i-1}.
+\]
+The equality case is
+\[
+a_i+b_i=1 \iff \ell_i=r_{i-1}.
+\]
+
+The local coordinates at `V_i` use the two boundary directions toward `V_{i+1}` and `V_{i-1}`. In those coordinates a sampled point has coordinates `(u,v)` with `u,v >= 0`, and the metric is
+\[
+\|(u,v)\|^2=u^2+v^2-uv.
+\]
+The displayed region `R_i` is computed from the local membership predicate for all unit equilateral triangles containing
+\[
+V_i,\quad Y_{i-1},\quad X_i
+\]
+inside the local `120^\circ` cone. The table value
+\[
+d_i=\sqrt{a_i^2+a_i b_i+b_i^2}
+\]
+is the distance between the adjacent edge dots `Y_{i-1}` and `X_i`; if `d_i>1`, the local required set cannot fit inside a unit equilateral triangle.
+
+The uncovered red region is
+\[
+U=H\setminus \bigcup_i R_i.
+\]
+For a normal angle `theta`, the purple triangle uses the sampled support values of `U` in the three equilateral normal directions and displays the sampled side length
+\[
+L(\theta)=\frac{2}{\sqrt3}\sum_{k=0}^2 h_k(\theta).
+\]
+The optimize button samples `theta` in `[0,2\pi/3)` to estimate `L_*`.
+
+Optional UI modifiers:
+
+- Individual region visibility affects only the displayed covered fill.
+- `clip to corner sectors` clips each `R_i` by the adjacent half-diagonal sector; locally this is `0 <= u <= 1` and `0 <= v <= 1`.
+- `hex-axis hull` replaces rows with `a_i+b_i < 1` by a coarse sampled hull clipped in the third hex direction. The target clip lines pass through the adjacent-edge boundary hits `(h(a_i),0)` and `(0,h(b_i))`, where `h(t)=(-t+sqrt(4-3t^2))/2`; if needed they relax to the sampled exact support so the hull still contains the sampled region. Other rows fall back to the exact sampled predicate.
+- The red-pair search checks sampled points of `U` for a witness pair with Euclidean distance greater than `1`.
+- `Move`, `Add`, and `Delete` tools edit the edge dots.  An edge has at least one dot and at most two dots.
+- `d-mark` and `s-mark` labels are UI annotations for intersections between the C-triangle or C-circle boundary and a fixed hexagon edge or half-diagonal. `D` labels recompute; `S` labels are frozen at creation time.
+- `f mark` dots are free annotations inside the hexagon; two show their distance, and three or more show the smallest enclosing equilateral triangle.
+- Perimeter-edge labels can move an eligible edge dot once with `snap`, or keep it coincident with the label using a persistent lock.
+- `lock center` freezes the current center geometry controls for the C-triangle, C-circle, or manual `c_i` hull.
+- `same a` and `same b` locks are UI constraints on selected `a_i` and `b_i` values; they are not additional geometry.
+
+## 12. What remains to prove mathematically
 
 To finish the contradiction argument, one still needs a rigorous statement of the form:
 
@@ -281,3 +348,131 @@ To finish the contradiction argument, one still needs a rigorous statement of th
 3. the resulting composition map cannot satisfy the required cyclic inequality.
 
 The admissible-set description is the local input. The composition inequality is the global output. The non-coverability statement follows once those two pieces are connected without exception.
+
+## 13. The variable point target \(S_t\)
+
+Free mode also has a point target interpolating along the half-diagonals.
+For each \(0\le t\le 1\), define
+\[
+P_i(t):=(1-t)V_i,\qquad i=0,\dots,5.
+\]
+Thus \(P_i(t)\in[O,V_i]\) and
+\[
+\operatorname{dist}(O,P_i(t))=1-t.
+\]
+
+The app allows a finite list of shared parameters \(t_1,\dots,t_k\).  The
+target is
+\[
+S_t:=S_{1/2}\cup\{P_i(t_j): i=0,\dots,5,\ j=1,\dots,k\}.
+\]
+It keeps the whole hexagon boundary and the seven points
+\[
+O,M_0,\dots,M_5
+\]
+from \(S_{1/2}\), and adds the same finite set of extra positions on each
+half-diagonal.
+
+Special values are:
+
+- \(t=0\): \(P_i(t)=V_i\),
+- \(t=\tfrac12\): \(P_i(t)=M_i\),
+- \(t=1\): \(P_i(t)=O\).
+
+Each \(t_j\) is shared by all six half-diagonals.  In Free mode, dragging any
+\(P_i(t_j)\) changes only that shared \(t_j\), unless that row is locked.  The
+lock only disables the UI handle; it does not change the mathematical target.
+
+## 14. D6 point-orbit targets
+
+The app also has an interactive point tool in Triangle, \(c_i\), Circle, and
+Free modes.  A seed point \(Q\in H\) generates the D6 orbit
+\[
+\mathcal O_{D_6}(Q)
+=
+\{r^k Q:k=0,\dots,5\}\cup\{r^k\sigma Q:k=0,\dots,5\},
+\]
+where \(r\) is rotation by \(\pi/3\) about \(O\), and
+\(\sigma(x,y)=(x,-y)\).  The app uses the set of distinct orbit points, so a
+generic seed gives twelve points, while seeds on symmetry axes or at \(O\) may
+give fewer.
+
+For a finite list of seeds \(Q_1,\dots,Q_m\), the additional point target is
+\[
+\mathcal Q
+=
+\bigcup_{\ell=1}^m \mathcal O_{D_6}(Q_\ell).
+\]
+These points are added to the active coverability check.  In Triangle mode
+they are tested against the C-triangle together with the generated
+\(V_i\)-triangles.  In \(c_i\) mode they are tested against the generated
+\(V_i\)-triangles.  In Circle mode they are tested against the C-circle
+together with the generated \(V_i\)-triangles.  In Free mode they are tested
+against all seven placed unit equilateral triangles.
+
+## 15. The Benzene target
+
+Free mode also has a target called **Benzene**.  It adds one fixed point in
+each center subtriangle
+\[
+\triangle O V_i V_{i+1},\qquad i=0,\dots,5,
+\]
+with indices taken mod `6`.
+
+Define
+\[
+B_i:=\frac{O+V_i+V_{i+1}}{3}=\frac{V_i+V_{i+1}}{3}.
+\]
+Thus \(B_i\) is the centroid of the subtriangle \(\triangle O V_i V_{i+1}\).
+
+The Benzene target is
+\[
+\operatorname{Benzene}:=S\cup\{B_0,\dots,B_5\}.
+\]
+Equivalently, it is the full skeleton together with these six interior
+centroid points.  The \(B_i\) are fixed points; there is no additional
+parameter or drag interaction.
+
+## 16. The lotus target
+
+There is another 1-dimensional target set used by the app, called **lotus**.
+Let
+\[
+D_i := \{p : \|p-V_i\|\le 1\}
+\]
+be the closed unit disk centered at the hexagon vertex `V_i`. The informal construction starts from the parity/XOR pattern
+\[
+(D_0\oplus D_1\oplus\cdots\oplus D_5)\cap H.
+\]
+The app's lotus target is not this filled 2-dimensional parity region. The target is the following explicit 1-dimensional curve set.
+
+For each `i`, define two unit-circle arcs from `O` to `V_i`:
+\[
+A_i^- \subset \partial D_{i-1},
+\qquad
+A_i^+ \subset \partial D_{i+1},
+\]
+where indices are taken mod `6`. Thus `A_i^-` is centered at `V_{i-1}` and `A_i^+` is centered at `V_{i+1}`. Define
+\[
+L_i := A_i^- \cup A_i^+.
+\]
+
+The lotus target is
+\[
+\operatorname{Lotus}
+:=
+\partial H \cup \bigcup_{i=0}^5 L_i.
+\]
+Equivalently, it is the twelve arcs `A_i^\pm` together with the six perimeter edges
+\[
+\partial H = \bigcup_i [V_i,V_{i+1}]
+\]
+The perimeter is part of lotus, but it is recorded separately from the leaves `L_i`.
+
+The useful geometric observation is that a unit equilateral triangle can intersect positive-length portions of at most four of the twelve lotus arcs. The app's Free-mode `Lotus` target currently checks coverage geometrically: each arc and perimeter edge is tested against the seven placed triangles by exact interval coverage.
+
+The question represented by this mode is:
+
+> Can the lotus target be covered by seven unit equilateral triangles?
+
+This note records the definition and locality model only; it does not assert the answer to the seven-triangle lotus question.

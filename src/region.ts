@@ -40,9 +40,9 @@ export interface RegionRenderer {
   setMode(mode: GraphMode): void;
   setSingleParameter(value: number): void;
   setLocalCs(localCs: number[]): void;
-  setSelectedLocalCs(localCs: number[]): void;
+  setSelectedLocalCs(localCs: number[], label?: string): void;
   setStartValue(value: number): void;
-  setHoverLocalC(value: number | null): void;
+  setHoverLocalC(value: number | null, label?: string): void;
 }
 
 function clamp01(value: number): number {
@@ -91,8 +91,10 @@ export function createRegionRenderer(
   let singleParameter = 0.5;
   let localCs = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
   let selectedLocalCs: number[] = [];
+  let selectedLocalCsLabel = "";
   let startValue = 0.25;
   let hoverLocalC: number | null = null;
+  let hoverLocalCLabel = "";
   let pairParameters: PairParameters = { c1: 0.5, c2: 0.5 };
   const pairTrace: PairTracePoint[] = [];
   let draggingPairController = false;
@@ -488,7 +490,11 @@ export function createRegionRenderer(
 
     ctx.fillStyle = HOVER_GRAPH_COLOR;
     ctx.font = `${smallFontSize}px monospace`;
-    ctx.fillText(`hover g_c, c = ${hoverLocalC.toFixed(3)}`, padding, padding - 14);
+    ctx.fillText(
+      hoverLocalCLabel || `hover g_c, c = ${hoverLocalC.toFixed(3)}`,
+      padding,
+      padding - 14,
+    );
   }
 
   function drawSelectedCompositionGraph(): void {
@@ -522,7 +528,11 @@ export function createRegionRenderer(
 
     ctx.fillStyle = TEXT_COLOR;
     ctx.font = `${smallFontSize}px monospace`;
-    ctx.fillText(`selected compose (${selectedLocalCs.length})`, padding, padding - 30);
+    ctx.fillText(
+      selectedLocalCsLabel || `selected compose (${selectedLocalCs.length})`,
+      padding,
+      padding - 30,
+    );
   }
 
   function drawMarker(): void {
@@ -684,14 +694,16 @@ export function createRegionRenderer(
     setLocalCs(nextLocalCs: number[]): void {
       localCs = nextLocalCs.map(clamp01);
     },
-    setSelectedLocalCs(nextLocalCs: number[]): void {
+    setSelectedLocalCs(nextLocalCs: number[], label?: string): void {
       selectedLocalCs = nextLocalCs.map(clamp01);
+      selectedLocalCsLabel = label ?? "";
     },
     setStartValue(value: number): void {
       startValue = clamp01(value);
     },
-    setHoverLocalC(value: number | null): void {
+    setHoverLocalC(value: number | null, label?: string): void {
       hoverLocalC = value === null ? null : clamp01(value);
+      hoverLocalCLabel = value === null ? "" : (label ?? "");
     },
   };
 }

@@ -1,0 +1,29 @@
+just use the same strictEps given left side of the interface. delete the strictEps in the control panel of freemode
+
+change the behavior of Vd0 mode in freemode.
+currently the Vd0 mode measures raw a,b,c in terms of farthest uncovered point from V_i
+make that default.
+but add a tool right next to the Vd0 mode in each row V_i triangle.
+that we can set raw a,b,c manually.
+however, we will not set raw a,b,c to any value.
+for example, when we want to set raw c value, we have to choose a labeld point that is on the half diagonal connected to V_i.
+then c is measured to be the distance from V_i to the chosen point.
+the code auto detects all labeld point on that half diagonal and only show those points to choose.
+ask me many questions
+
+i have strictcheck off and stricteps = 0, but if a V triangle edge passes V_i, then it doesn't contain V_i.
+it means it is treated as open triangle, but i thought it was treated as closed triangle. how does it work exactly
+
+then change the Vd0 auto place. tell me mathematiclly rigorously how
+
+don't accept just 1+ 1e-6. make it tighter
+reduce this side tolerance to 1e-9 and also accept the autoplace only if the final stored unit actually contains the required a,b,c and V_i points
+
+
+› change curent mark name to dynamic mark, and add a static mark tool where if you mark, the coordinate is fixed. marking way is same. name them d-mark
+  and s-mark, or do you have a better name? ask me questions
+
+  Should static marks keep their two source segment refs after creation: only if one of the segment is a fixed segment like half diagonal or hexagon
+  edge
+
+  to make the shape of labels same, just record first and second also for the static label shape
